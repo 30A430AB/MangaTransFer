@@ -1,6 +1,7 @@
 window.projectPages = null;
 window.projectDirectory = null;
 window.currentImg = null;
+window.originalProjectPages = null;
 
 function showToast(message, type = 'info') {
     const toast = document.createElement('div');
@@ -52,6 +53,8 @@ window.selectProjectFile = function() {
                 window.projectPages = data.pages;
                 window.projectDirectory = data.directory;
                 window.currentImg = data.current_img;
+                // 保存原始数据副本
+                window.originalProjectPages = JSON.parse(JSON.stringify(data.pages));
 
                 if (data.imageUrl) {
                     window.canvasControls.loadLayers(data.imageUrl, data.inpaintedImageUrl, data.textBlocks);
@@ -117,13 +120,25 @@ function generateThumbnails(thumbnails, directory) {
 }
 
 function loadImage(key, directory) {
-    if (window.canvasControls && window.canvasControls.updateCurrentPageData) {
-        window.canvasControls.updateCurrentPageData();
+    // 不再自动保存当前页数据
+    // if (window.canvasControls && window.canvasControls.updateCurrentPageData) {
+    //     window.canvasControls.updateCurrentPageData();
+    // }
+
+    // 保存参考图可见状态
+    const wasWorkingVisible = window.canvasControls && window.canvasControls.isWorkingReferenceVisible ? window.canvasControls.isWorkingReferenceVisible() : false;
+    if (window.canvasControls && window.canvasControls.removeWorkingReference) {
+        window.canvasControls.removeWorkingReference();
     }
 
-    console.log('loadImage called with key:', key, 'directory:', directory);
-    const entries = window.projectPages ? window.projectPages[key] : [];
-    console.log('entries for this key:', entries);
+    // 从原始数据中获取该页的条目（确保位置信息是原始的）
+    const entries = window.originalProjectPages ? window.originalProjectPages[key] : (window.projectPages ? window.projectPages[key] : []);
+    
+    // 重置 window.projectPages 中该页的数据为原始数据，丢弃未保存的修改
+    if (window.projectPages && key) {
+        window.projectPages[key] = JSON.parse(JSON.stringify(entries));
+    }
+
     fetch('/get_image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -133,9 +148,15 @@ function loadImage(key, directory) {
     .then(data => {
         if (data.originalImageUrl) {
             window.currentImg = key;
-            window.canvasControls.loadLayers(data.originalImageUrl, data.inpaintedImageUrl, data.textBlocks);
-            updateTextBlocks(data.textBlocks, entries, key);
-            highlightCurrentThumbnail(key);
+            return window.canvasControls.loadLayers(data.originalImageUrl, data.inpaintedImageUrl, data.textBlocks)
+                .then(() => {
+                    // 传入 key 以便 updateTextBlocks 访问 window.projectPages
+                    updateTextBlocks(data.textBlocks, key);
+                    highlightCurrentThumbnail(key);
+                    if (wasWorkingVisible) {
+                        return window.canvasControls.loadWorkingReference();
+                    }
+                });
         } else {
             showToast('加载图片失败：' + (data.error || '未知错误'), 'error');
         }
@@ -146,7 +167,7 @@ function loadImage(key, directory) {
     });
 }
 
-function updateTextBlocks(textBlocks, entries, pageKey) {
+function updateTextBlocks(textBlocks, pageKey) {
     const countElement = document.getElementById('text-block-count');
     if (countElement) {
         countElement.textContent = `文本块 (${textBlocks.length})`;
@@ -156,7 +177,12 @@ function updateTextBlocks(textBlocks, entries, pageKey) {
     container.innerHTML = '';
 
     textBlocks.forEach((block, index) => {
-        const entry = entries ? entries[index] : null;
+        // 从 window.projectPages 获取当前可能被修改的可见性
+        let currentVisible = block.visible; // 默认原始值
+        if (window.projectPages && window.projectPages[pageKey] && window.projectPages[pageKey][index]) {
+            const entry = window.projectPages[pageKey][index];
+            currentVisible = (entry.matched === 1);
+        }
 
         const card = document.createElement('div');
         card.className = 'text-block-card';
@@ -175,27 +201,27 @@ function updateTextBlocks(textBlocks, entries, pageKey) {
 
         const eyeBtn = document.createElement('div');
         eyeBtn.className = 'text-block-button';
-        const initialIcon = block.visible ? 'visibility' : 'visibility_off';
+        const initialIcon = currentVisible ? 'visibility' : 'visibility_off';
         eyeBtn.innerHTML = `<span class="material-icons">${initialIcon}</span>`;
         eyeBtn.setAttribute('data-index', index);
 
         eyeBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            const newVisible = !block.visible;
+            const newVisible = !(block.visible); // 直接切换当前块的 visible 属性
             block.visible = newVisible;
-            if (window.projectPages && pageKey && entry) {
-                entry.matched = newVisible ? 1 : 0;
-            }
             eyeBtn.innerHTML = `<span class="material-icons">${newVisible ? 'visibility' : 'visibility_off'}</span>`;
-            if (window.canvasControls.setTextBlockVisibility) {
+            if (window.canvasControls && window.canvasControls.setTextBlockVisibility) {
                 window.canvasControls.setTextBlockVisibility(index, newVisible);
+            }
+            // 可选：同步到 window.projectPages，但保存时会覆盖
+            if (window.projectPages && window.projectPages[pageKey] && window.projectPages[pageKey][index]) {
+                window.projectPages[pageKey][index].matched = newVisible ? 1 : 0;
             }
         });
 
         footerDiv.appendChild(eyeBtn);
         card.appendChild(footerDiv);
 
-        // 新增：鼠标悬停时高亮画布上对应的文本块（蓝色阴影）
         card.addEventListener('mouseenter', () => {
             if (window.canvasControls && window.canvasControls.highlightTextBlock) {
                 window.canvasControls.highlightTextBlock(index, true);
@@ -227,6 +253,7 @@ window.loadProjectFromData = function(data) {
         window.projectPages = data.pages;
         window.projectDirectory = data.directory;
         window.currentImg = data.current_img;
+        window.originalProjectPages = JSON.parse(JSON.stringify(data.pages));
 
         if (data.imageUrl) {
             window.canvasControls.loadLayers(data.imageUrl, data.inpaintedImageUrl, data.textBlocks);
@@ -251,6 +278,7 @@ window.loadProjectFromData = function(data) {
 };
 
 window.saveProject = function() {
+    // 保存前将当前画布上的位置同步到 window.projectPages
     if (window.canvasControls && window.canvasControls.updateCurrentPageData) {
         window.canvasControls.updateCurrentPageData();
     }
@@ -283,6 +311,8 @@ window.saveProject = function() {
         return saveImages(directory, key, entries);
     })
     .then(() => {
+        // 保存成功后，将当前 projectPages 更新为原始数据
+        window.originalProjectPages = JSON.parse(JSON.stringify(window.projectPages));
         showToast('保存成功', 'success');
     })
     .catch(err => {
@@ -369,7 +399,6 @@ function highlightCurrentThumbnail(currentKey) {
     }
 }
 
-// 上一页
 window.goToPrevPage = function() {
     if (!window.projectPages || !window.currentImg || !window.projectDirectory) {
         showToast('没有加载项目', 'error');
@@ -385,7 +414,6 @@ window.goToPrevPage = function() {
     loadImage(prevKey, window.projectDirectory);
 };
 
-// 下一页
 window.goToNextPage = function() {
     if (!window.projectPages || !window.currentImg || !window.projectDirectory) {
         showToast('没有加载项目', 'error');

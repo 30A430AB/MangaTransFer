@@ -124,6 +124,9 @@ with ui.element('div').classes('fixed top-0 left-0 w-full h-full').style('margin
                             reset_btn = ui.button(icon='crop_free', color='transparent') \
                                 .props('flat dense') \
                                 .on('click', lambda: ui.run_javascript('window.canvasControls.resetZoom()'))
+                            split_btn = ui.button(icon='view_column', color='transparent') \
+                                .props('flat dense') \
+                                .on('click', lambda: ui.run_javascript('window.canvasControls.toggleWorkingReference()'))
                             new_btn = ui.button(icon='create_new_folder', color='transparent') \
                                 .props('flat dense') \
                                 .on('click', show_new_project_dialog)
@@ -209,7 +212,7 @@ def generate_text_blocks(directory, page_key, entries):
             text_img_path = potential_path
             break
     if not text_img_path:
-        print(f"text 图片不存在 for {page_key} in {text_dir}")
+        # print(f"text 图片不存在 for {page_key} in {text_dir}")
         return []
     text_blocks = []
     try:
@@ -644,6 +647,32 @@ async def save_result(request: Request):
     except Exception as e:
         print(f"保存结果失败: {e}")
         return {'error': str(e)}
+    
+@app.post('/get_working_image')
+async def get_working_image(request: Request):
+    data = await request.json()
+    directory = data.get('directory')
+    key = data.get('key')
+    if not directory or not key:
+        return {'error': 'Missing directory or key'}
+    working_dir = os.path.join(directory, 'text_working')
+    if not os.path.exists(working_dir):
+        return {'error': 'text_working directory not found'}
+    for ext in IMAGE_EXTS:
+        potential_path = os.path.join(working_dir, key + ext)
+        if os.path.exists(potential_path):
+            try:
+                with open(potential_path, 'rb') as f:
+                    img_data = f.read()
+                img_base64 = base64.b64encode(img_data).decode('utf-8')
+                ext = potential_path.split('.')[-1].lower()
+                if ext == 'jpg':
+                    ext = 'jpeg'
+                mime_type = f'image/{ext}'
+                return {'imageUrl': f'data:{mime_type};base64,{img_base64}'}
+            except Exception as e:
+                return {'error': f'Failed to read working image: {str(e)}'}
+    return {'error': f'Working image not found for {key}'}
 
 ui.run(
     title='Sharingan',

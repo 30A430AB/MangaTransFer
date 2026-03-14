@@ -117,11 +117,12 @@ class MangaTranslationPipeline:
         """准备输出目录结构"""
         dirs = {
             'text': self.output_dir / "text",           # 文字提取输出
+            'text_working': self.output_dir / "text_working", # 调整后的熟肉图片
             'raw_mask': self.output_dir / "raw_mask",   # 生肉检测输出
             'text_mask': self.output_dir / "text_mask", # 熟肉检测输出
             'new_mask': self.output_dir / "mask",       # 匹配后mask
             'inpainted': self.output_dir / "inpainted", # 修复结果
-            'result': self.output_dir / "result"        # 最终结果
+            'result': self.output_dir / "result",        # 最终结果
         }
         
         for dir_path in dirs.values():
@@ -129,10 +130,41 @@ class MangaTranslationPipeline:
             
         return dirs
     
-    def step1_resize_images(self):
-        """步骤1: 调整熟肉图片尺寸与生肉匹配"""
-        self.logger.info("步骤1: 调整熟肉图片尺寸")
+    def step1_resize_images(self, directories):
+        """步骤1: 复制熟肉图片到工作目录，然后调整尺寸匹配生肉"""
+        self.logger.info("步骤1:  复制熟肉图片并调整尺寸")
         
+        # 1. 复制原始熟肉图片到工作目录
+        src_dir = self.text_dir
+        dst_dir = directories['text_working']
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 获取原始熟肉图片列表
+        text_images = self._get_sorted_images(src_dir)
+        if not text_images:
+            raise Exception(f"熟肉目录中没有图片文件: {src_dir}")
+        
+        # 复制所有熟肉图片到工作目录
+        copied = 0
+        for img_path in text_images:
+            dst_path = dst_dir / img_path.name
+            try:
+                # 使用 shutil.copy2 保留元数据
+                import shutil
+                shutil.copy2(img_path, dst_path)
+                copied += 1
+                self.logger.info(f"已复制: {img_path.name}")
+            except Exception as e:
+                self.logger.error(f"复制失败 {img_path.name}: {e}")
+        
+        if copied == 0:
+            raise Exception("没有成功复制任何熟肉图片")
+        self.logger.info(f"已复制 {copied} 张熟肉图片到工作目录: {dst_dir}")
+        
+        # 2. 更新 self.text_dir 指向工作目录
+        self.text_dir = dst_dir
+        
+        # 3. 调用原有调整尺寸函数
         resize_count = resize_text_images_to_match_raw(
             raw_dir=str(self.raw_dir),
             text_dir=str(self.text_dir),
@@ -141,7 +173,7 @@ class MangaTranslationPipeline:
         
         if resize_count == 0:
             raise Exception("没有成功调整任何熟肉图片尺寸")
-            
+        
         self.logger.info(f"成功调整 {resize_count} 张图片")
         return True
     
@@ -280,7 +312,7 @@ class MangaTranslationPipeline:
             directories = self.prepare_directories()
             
             # 执行处理步骤
-            self.step1_resize_images()
+            self.step1_resize_images(directories)
             self.step2_detect_text(directories)
             match_output = self.step3_match_boxes(directories)
             self.step4_adjust_coordinates(directories)

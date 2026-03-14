@@ -16,6 +16,8 @@ let imageHeight = 1080;
 let currentRawOpacity = 100;
 let currentTextOpacity = 100;          // 修复层透明度
 let currentTextLayerOpacity = 100;      // 新增：文本层透明度，默认100
+let workingReferenceImage = null;
+let workingReferenceVisible = false;
 
 let isDraggingText = false;
 let draggedTextIndex = -1;
@@ -61,19 +63,28 @@ function initCanvas() {
         const containerWidth = canvasContainer.clientWidth;
         const containerHeight = canvasContainer.clientHeight;
         
-        const minScaleX = containerWidth / imageWidth;
-        const minScaleY = containerHeight / imageHeight;
-        minScale = Math.min(minScaleX, minScaleY);
+        let targetWidth, targetHeight;
+        if (workingReferenceImage && workingReferenceImage.visible) {
+            targetWidth = imageWidth * 2;
+            targetHeight = imageHeight;
+        } else {
+            targetWidth = imageWidth;
+            targetHeight = imageHeight;
+        }
         
-        if (zoom < minScale) {
-            zoom = minScale;
+        const minScaleX = containerWidth / targetWidth;
+        const minScaleY = containerHeight / targetHeight;
+        const newMinScale = Math.min(minScaleX, minScaleY);
+        
+        if (zoom < newMinScale) {
+            zoom = newMinScale;
         }
         
         canvas.setZoom(zoom);
         currentScale = zoom;
+        minScale = newMinScale;
         
         updateImagePosition();
-        
         updateZoomDisplay();
         
         opt.e.preventDefault();
@@ -180,8 +191,17 @@ function fitImageToCanvas() {
     const containerWidth = canvasContainer.clientWidth;
     const containerHeight = canvasContainer.clientHeight;
     
-    const scaleX = containerWidth / imageWidth;
-    const scaleY = containerHeight / imageHeight;
+    let targetWidth, targetHeight;
+    if (workingReferenceImage && workingReferenceImage.visible) {
+        targetWidth = imageWidth * 2;
+        targetHeight = imageHeight;
+    } else {
+        targetWidth = imageWidth;
+        targetHeight = imageHeight;
+    }
+    
+    const scaleX = containerWidth / targetWidth;
+    const scaleY = containerHeight / targetHeight;
     const scale = Math.min(scaleX, scaleY);
     
     canvas.setZoom(scale);
@@ -189,9 +209,7 @@ function fitImageToCanvas() {
     minScale = scale;
     
     centerImage();
-    
     updateZoomDisplay();
-    
     canvas.requestRenderAll();
 }
 
@@ -201,8 +219,17 @@ function centerImage() {
     const containerWidth = canvasContainer.clientWidth;
     const containerHeight = canvasContainer.clientHeight;
     
-    const scaledWidth = imageWidth * currentScale;
-    const scaledHeight = imageHeight * currentScale;
+    let targetWidth, targetHeight;
+    if (workingReferenceImage && workingReferenceImage.visible) {
+        targetWidth = imageWidth * 2;
+        targetHeight = imageHeight;
+    } else {
+        targetWidth = imageWidth;
+        targetHeight = imageHeight;
+    }
+    
+    const scaledWidth = targetWidth * currentScale;
+    const scaledHeight = targetHeight * currentScale;
     
     const left = (containerWidth - scaledWidth) / 2;
     const top = (containerHeight - scaledHeight) / 2;
@@ -222,35 +249,34 @@ function updateImagePosition() {
 
 function applyViewportBoundaries() {
     if (!comicImage || !canvasContainer) return;
-    
     const containerWidth = canvasContainer.clientWidth;
     const containerHeight = canvasContainer.clientHeight;
-    
-    const scaledWidth = imageWidth * currentScale;
-    const scaledHeight = imageHeight * currentScale;
-    
     const vpt = canvas.viewportTransform;
-    
-    if (scaledWidth <= containerWidth) {
-        vpt[4] = (containerWidth - scaledWidth) / 2;
-    } else {
-        if (vpt[4] > 0) {
-            vpt[4] = 0;
-        }
-        if (vpt[4] + scaledWidth < containerWidth) {
-            vpt[4] = containerWidth - scaledWidth;
-        }
+    // 确定可视内容的边界（原始坐标）
+    let minX = 0, maxX = imageWidth; // 默认只考虑原图
+    if (workingReferenceImage && workingReferenceImage.visible) {
+        minX = -imageWidth;
+        maxX = imageWidth;
     }
-    
+    const scaledMinX = minX * currentScale;
+    const scaledMaxX = maxX * currentScale;
+    const scaledWidth = scaledMaxX - scaledMinX;
+    const scaledHeight = imageHeight * currentScale;
+    // 水平约束
+    if (scaledWidth <= containerWidth) {
+        vpt[4] = (containerWidth - scaledWidth) / 2 - scaledMinX;
+    } else {
+        const maxBound = -scaledMinX;
+        const minBound = containerWidth - scaledMaxX;
+        if (vpt[4] > maxBound) vpt[4] = maxBound;
+        if (vpt[4] < minBound) vpt[4] = minBound;
+    }
+    // 垂直约束
     if (scaledHeight <= containerHeight) {
         vpt[5] = (containerHeight - scaledHeight) / 2;
     } else {
-        if (vpt[5] > 0) {
-            vpt[5] = 0;
-        }
-        if (vpt[5] + scaledHeight < containerHeight) {
-            vpt[5] = containerHeight - scaledHeight;
-        }
+        if (vpt[5] > 0) vpt[5] = 0;
+        if (vpt[5] + scaledHeight < containerHeight) vpt[5] = containerHeight - scaledHeight;
     }
 }
 
@@ -512,103 +538,119 @@ function onCanvasMouseUp(opt) {
 }
 
 function loadLayers(originalUrl, inpaintedUrl, textBlocks) {
-    if (!canvas) return;
+    return new Promise((resolve, reject) => {
+        if (!canvas) {
+            reject('Canvas not initialized');
+            return;
+        }
 
-    const loadImagePromise = (url) => {
-        return new Promise((resolve, reject) => {
-            if (!url) {
-                resolve(null);
-                return;
-            }
-            fabric.Image.fromURL(url, (img) => {
-                if (img) resolve(img);
-                else reject(new Error(`Failed to load image: ${url}`));
+        const loadImagePromise = (url) => {
+            return new Promise((res, rej) => {
+                if (!url) {
+                    res(null);
+                    return;
+                }
+                fabric.Image.fromURL(url, (img) => {
+                    if (img) res(img);
+                    else rej(new Error(`Failed to load image: ${url}`));
+                });
             });
-        });
-    };
+        };
 
-    Promise.all([loadImagePromise(originalUrl), loadImagePromise(inpaintedUrl)])
-        .then(([originalImg, inpaintedImg]) => {
-            if (comicImage) canvas.remove(comicImage);
-            if (inpaintedImage) canvas.remove(inpaintedImage);
-            textImages.forEach(img => canvas.remove(img));
-            textImages = [];
+        // 移除旧对象
+        if (comicImage) canvas.remove(comicImage);
+        if (inpaintedImage) canvas.remove(inpaintedImage);
+        textImages.forEach(img => canvas.remove(img));
+        textImages = [];
 
-            comicImage = originalImg;
-            comicImage.set({
-                selectable: false,
-                hasControls: false,
-                hasBorders: false,
-                left: 0,
-                top: 0
-            });
-            canvas.add(comicImage);
-            canvas.sendToBack(comicImage);
-            comicImage.set('opacity', currentRawOpacity / 100);
-
-            imageWidth = comicImage.width;
-            imageHeight = comicImage.height;
-
-            if (inpaintedImg) {
-                inpaintedImage = inpaintedImg;
-                inpaintedImage.set({
+        Promise.all([loadImagePromise(originalUrl), loadImagePromise(inpaintedUrl)])
+            .then(([originalImg, inpaintedImg]) => {
+                comicImage = originalImg;
+                comicImage.set({
                     selectable: false,
                     hasControls: false,
                     hasBorders: false,
                     left: 0,
                     top: 0
                 });
-                if (Math.abs(inpaintedImage.width - imageWidth) > 1 || Math.abs(inpaintedImage.height - imageHeight) > 1) {
-                    inpaintedImage.scaleToWidth(imageWidth);
-                    inpaintedImage.scaleToHeight(imageHeight);
-                }
-                canvas.add(inpaintedImage);
-                canvas.bringForward(inpaintedImage);
-                inpaintedImage.set('opacity', currentTextOpacity / 100);
-            }
+                canvas.add(comicImage);
+                canvas.sendToBack(comicImage);
+                comicImage.set('opacity', currentRawOpacity / 100);
 
-            currentOriginalUrl = originalUrl;
-            currentInpaintedUrl = inpaintedUrl;
+                imageWidth = comicImage.width;
+                imageHeight = comicImage.height;
 
-            if (textBlocks && textBlocks.length > 0) {
-                const textPromises = textBlocks.map(block => {
-                    return loadImagePromise(block.imageUrl).then(img => {
-                        if (img) {
-                            img.set({
-                                left: block.left,
-                                top: block.top,
-                                selectable: false,
-                                hasControls: false,
-                                hasBorders: false,
-                                visible: block.visible !== undefined ? block.visible : true,
-                                evented: true,
-                                hoverCursor: 'pointer',
-                            });
-                            canvas.add(img);
-                            textImages.push(img);
-                        }
+                if (inpaintedImg) {
+                    inpaintedImage = inpaintedImg;
+                    inpaintedImage.set({
+                        selectable: false,
+                        hasControls: false,
+                        hasBorders: false,
+                        left: 0,
+                        top: 0
                     });
-                });
-                return Promise.all(textPromises).then(() => {
-                    // 应用当前文本层透明度
-                    textImages.forEach(img => {
-                        img.set('opacity', currentTextLayerOpacity / 100);
-                    });
-                    // 可选：再次确保修复层透明度正确（防止被覆盖）
-                    if (inpaintedImage) {
-                        inpaintedImage.set('opacity', currentTextOpacity / 100);
+                    if (Math.abs(inpaintedImage.width - imageWidth) > 1 || Math.abs(inpaintedImage.height - imageHeight) > 1) {
+                        inpaintedImage.scaleToWidth(imageWidth);
+                        inpaintedImage.scaleToHeight(imageHeight);
                     }
-                });
-            }
-        })
-        .then(() => {
-            fitImageToCanvas();
-            canvas.renderAll();
-            bindCanvasEvents();
-        })
-        .catch(err => {
-            console.error('Error loading layers:', err);
-        });
+                    canvas.add(inpaintedImage);
+                    canvas.bringForward(inpaintedImage);
+                    inpaintedImage.set('opacity', currentTextOpacity / 100);
+                }
+
+                currentOriginalUrl = originalUrl;
+                currentInpaintedUrl = inpaintedUrl;
+
+                if (textBlocks && textBlocks.length > 0) {
+                    const textPromises = textBlocks.map(block => {
+                        return loadImagePromise(block.imageUrl).then(img => {
+                            if (img) {
+                                img.set({
+                                    left: block.left,
+                                    top: block.top,
+                                    selectable: false,
+                                    hasControls: false,
+                                    hasBorders: false,
+                                    visible: block.visible !== undefined ? block.visible : true,
+                                    evented: true,
+                                    hoverCursor: 'pointer',
+                                });
+                                return img; // 返回图像对象
+                            }
+                            return null;
+                        });
+                    });
+                    return Promise.all(textPromises).then(images => {
+                        images.forEach((img, idx) => {
+                            if (img) {
+                                canvas.add(img);
+                                textImages[idx] = img; // 按索引赋值，保证顺序
+                            }
+                        });
+                        // 然后设置透明度等
+                        textImages.forEach(img => {
+                            img.set('opacity', currentTextLayerOpacity / 100);
+                        });
+                        if (inpaintedImage) {
+                            inpaintedImage.set('opacity', currentTextOpacity / 100);
+                        }
+                        fitImageToCanvas();
+                        canvas.renderAll();
+                        bindCanvasEvents();
+                        resolve();
+                    });
+                } else {
+                    fitImageToCanvas();
+                    canvas.renderAll();
+                    bindCanvasEvents();
+                    resolve();
+                }
+            })
+            .catch(err => {
+                console.error('Error loading layers:', err);
+                reject(err);
+            });
+    });
 }
 
 function dataURItoBlob(dataURI) {
@@ -951,7 +993,19 @@ window.canvasControls = {
             obj.set('shadow', null);
         }
         canvas.requestRenderAll();
-    }
+    },
+
+    toggleWorkingReference: toggleWorkingReference,
+    loadWorkingReference: loadWorkingReference,
+    removeWorkingReference: function() {
+        if (workingReferenceImage) {
+            canvas.remove(workingReferenceImage);
+            workingReferenceImage = null;
+            // 不改变 workingReferenceVisible 状态，只移除对象
+        }
+        canvas.renderAll();
+    },
+    isWorkingReferenceVisible: function() { return workingReferenceVisible; }
 };
 
 function cropImage(source, x, y, w, h) {
@@ -1010,4 +1064,134 @@ function mergeRepairedRegion(repairedImageUrl, x, y, w, h) {
             });
         });
     });
+}
+
+function updateSplitButtonActive(active) {
+    const splitBtn = document.querySelector('.tool-button[data-tool="split"]');
+    if (splitBtn) {
+        if (active) {
+            splitBtn.style.background = 'linear-gradient(135deg, #E3F2FD 0%, #BBDEFB 100%)';
+            splitBtn.style.color = '#4A90E2';
+            splitBtn.style.borderColor = '#4A90E2';
+            splitBtn.style.borderWidth = '1px';
+            splitBtn.style.boxShadow = 'inset 0 2px 4px rgba(74,144,226,0.2)';
+        } else {
+            splitBtn.style.background = '';
+            splitBtn.style.color = '';
+            splitBtn.style.borderColor = '';
+            splitBtn.style.borderWidth = '';
+            splitBtn.style.boxShadow = '';
+        }
+    }
+}
+
+function loadWorkingReference() {
+    if (!window.projectDirectory || !window.currentImg) {
+        window.showToast && window.showToast('没有加载项目', 'error');
+        return Promise.reject('No project loaded');
+    }
+    if (!comicImage) {
+        window.showToast && window.showToast('请先加载图片', 'error');
+        return Promise.reject('No image loaded');
+    }
+    return fetch('/get_working_image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ directory: window.projectDirectory, key: window.currentImg })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            console.error('Failed to load working reference:', data.error);
+            window.showToast && window.showToast('加载参考图失败：' + data.error, 'error');
+            return;
+        }
+        if (data.imageUrl) {
+            return new Promise((resolve, reject) => {
+                fabric.Image.fromURL(data.imageUrl, (img) => {
+                    if (!img) {
+                        reject('Failed to create image from URL');
+                        return;
+                    }
+                    // 移除旧的参考图
+                    if (workingReferenceImage) {
+                        canvas.remove(workingReferenceImage);
+                    }
+                    workingReferenceImage = img;
+                    workingReferenceImage.set({
+                        left: -imageWidth,          // 放在原图左侧
+                        top: 0,
+                        selectable: false,
+                        hasControls: false,
+                        hasBorders: false,
+                        evented: false,            // 不响应鼠标事件
+                        hoverCursor: 'default'
+                    });
+                    canvas.add(workingReferenceImage);
+                    canvas.sendToBack(workingReferenceImage); // 置于底层，但不会覆盖原图位置
+                    workingReferenceVisible = true;
+                    updateSplitButtonActive(true);
+                    adjustViewToIncludeReference(true);
+                    canvas.renderAll();
+                    resolve();
+                });
+            });
+        }
+    })
+    .catch(err => {
+        console.error('Error loading working reference:', err);
+        window.showToast && window.showToast('加载参考图失败', 'error');
+    });
+}
+
+function toggleWorkingReference() {
+    if (!window.projectDirectory || !window.currentImg) {
+        window.showToast && window.showToast('没有加载项目', 'error');
+        return;
+    }
+    if (!comicImage) {
+        window.showToast && window.showToast('请先加载图片', 'error');
+        return;
+    }
+    if (workingReferenceImage) {
+        // 已存在，切换可见性
+        workingReferenceVisible = !workingReferenceVisible;
+        workingReferenceImage.set('visible', workingReferenceVisible);
+        updateSplitButtonActive(workingReferenceVisible);
+        if (workingReferenceVisible) {
+            adjustViewToIncludeReference(true);
+        } else {
+            fitImageToCanvas();
+        }
+        canvas.renderAll();
+    } else {
+        // 不存在，加载并显示
+        loadWorkingReference();
+    }
+}
+
+function adjustViewToIncludeReference(include) {
+    if (!comicImage || !canvasContainer) return;
+    if (include && workingReferenceImage && workingReferenceImage.visible) {
+        const containerWidth = canvasContainer.clientWidth;
+        const containerHeight = canvasContainer.clientHeight;
+        const totalWidth = imageWidth * 2;
+        const totalHeight = imageHeight;
+        const scaleX = containerWidth / totalWidth;
+        const scaleY = containerHeight / totalHeight;
+        const scale = Math.min(scaleX, scaleY);
+        canvas.setZoom(scale);
+        currentScale = scale;
+        minScale = scale;
+        const scaledTotalWidth = totalWidth * scale;
+        const scaledTotalHeight = totalHeight * scale;
+        const left = (containerWidth - scaledTotalWidth) / 2;
+        const top = (containerHeight - scaledTotalHeight) / 2;
+        canvas.viewportTransform[4] = left;
+        canvas.viewportTransform[5] = top;
+        applyViewportBoundaries();
+        canvas.requestRenderAll();
+    } else {
+        fitImageToCanvas();
+    }
 }
