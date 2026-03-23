@@ -14,7 +14,7 @@ from cli import MangaTranslationPipeline
 import asyncio
 import sys
 
-ui.page_title('Sharingan')
+ui.page_title('MangaTransFer')
 app.add_static_files('/static', 'static')
 
 current_algorithm = 'patch_match'
@@ -78,7 +78,7 @@ with loading_dialog, ui.card().classes('items-center justify-center').style('wid
 with ui.element('div').classes('fixed top-0 left-0 w-full h-full').style('margin:0; padding:0; overflow:hidden;'):
     with ui.element('div').style('height:100%; margin:0; padding:0; display:flex; width:100%;'):
         with ui.element('div').style('width:10%; min-width:200px; flex-shrink:0; margin:0; padding:0; display:flex; flex-direction:column;').props('name="left-sidebar"'):
-            ui.label('Sharingan').classes('bg-white').style(
+            ui.label('MangaTransFer').classes('bg-white').style(
                 'height:40px; flex-shrink:0; margin:0; padding:0 12px; '
                 'display:flex; align-items:center; justify-content:center; font-weight:bold; font-size:20px; '
                 'border-bottom:1px solid #E0E0E0; box-sizing:border-box;'
@@ -675,8 +675,7 @@ async def get_working_image(request: Request):
     return {'error': f'Working image not found for {key}'}
 
 ui.run(
-    title='Sharingan',
-    favicon='static/favicon.ico',
+    title='MangaTransFer',
     host='127.0.0.1',
     port=8080,
     dark=False,
