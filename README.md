@@ -1,6 +1,6 @@
 # MangaTransFer
 
-漫画自动重嵌工具，愿天下不再有黑乎乎的漫画。
+愿天下不再有黑乎乎的漫画
 
 ![screenshot](assets/screenshot.png)
 <p align="center">界面预览</p>
