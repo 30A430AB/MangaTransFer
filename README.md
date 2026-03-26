@@ -1,6 +1,6 @@
 # MangaTransFer
 
-愿天下不再有黑乎乎的漫画
+带露折花，色香自然要好得多，昔时不能够，今以朝花夕拾，终可为止。
 
 ![screenshot](assets/screenshot.png)
 <p align="center">界面预览</p>
