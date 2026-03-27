@@ -150,14 +150,12 @@ def generate_text_blocks(directory, page_key, entries):
 
                     # 必须要有有效的 orig_xyxy 才能裁剪文本图像
                     if not orig_xyxy or len(orig_xyxy) != 4:
-                        print(f"Entry {idx} 的 orig_xyxy 无效: {orig_xyxy}，跳过")
                         continue
 
                     crop_box = (orig_xyxy[0], orig_xyxy[1], orig_xyxy[2], orig_xyxy[3])
                     # 检查裁剪区域是否超出图片边界
                     if (crop_box[0] < 0 or crop_box[1] < 0 or
                         crop_box[2] > text_img.width or crop_box[3] > text_img.height):
-                        print(f"Entry {idx} 裁剪区域 {crop_box} 超出图片范围，跳过")
                         continue
 
                     # 裁剪原始文本图像

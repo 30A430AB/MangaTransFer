@@ -380,7 +380,6 @@ function highlightCurrentThumbnail(currentKey) {
     cards.forEach(card => {
         const key = card.getAttribute('data-key');
         if (key === currentKey) {
-            card.style.border = '2px solid #2196f3';
             card.style.boxShadow = '0 0 5px rgba(33, 150, 243, 0.5)';
             currentCard = card;
         } else {

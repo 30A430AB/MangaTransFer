@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 import sys
+import time
 from natsort import natsorted
 from loguru import logger
 
@@ -270,6 +271,8 @@ class MangaTranslationPipeline:
     def step6_inpaint_raw(self, directories):
         """步骤6: 生肉图片修复"""
         self.logger.info("步骤6: 生肉图片修复")
+
+        start_time = time.time()
         
         inpainted_count = inpaint_raw_images(
             raw_img_dir=str(self.raw_dir),
@@ -278,6 +281,10 @@ class MangaTranslationPipeline:
             algorithm=self.inpaint_algorithm,
             status_callback=lambda idx, total: self.logger.info(f"修复图片 {idx}/{total}")
         )
+
+        # 计算耗时
+        elapsed_time = time.time() - start_time
+        self.logger.info(f"修复图片耗时: {elapsed_time:.2f} 秒")
         
         if inpainted_count == 0:
             raise Exception("没有成功修复任何生肉图片")

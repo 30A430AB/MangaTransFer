@@ -62,9 +62,9 @@ body, html, #__nuxt, #__nuxt-container {
 }
 
 .thumbnail-card:hover {
-    border: 1px solid #4A90E2;
+    border: 1px solid #66ccff;
     transform: translateY(-4px);
-    box-shadow: 0 8px 20px rgba(74, 144, 226, 0.15);
+    box-shadow: 0 4px 12px rgba(74, 144, 226, 0.1);
 }
 
 .thumbnail-card::before {
@@ -107,7 +107,7 @@ body, html, #__nuxt, #__nuxt-container {
 
 .text-block-card:hover {
     background: rgba(255, 255, 255, 0.95);
-    border-color: #4A90E2;
+    border-color: #66ccff;
     box-shadow: 0 6px 16px rgba(74, 144, 226, 0.12);
     transform: translateY(-2px);
 }

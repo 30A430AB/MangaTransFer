@@ -14,8 +14,8 @@ scipy==1.15.3
 setuptools==74.1.2
 Shapely==2.1.2
 simple_lama_inpainting==0.1.0
-torch==2.11.0+cpu
+#torch==2.11.0
 torch_summary==1.4.5
 torchsummary==1.5.1
-torchvision==0.26.0+cpu
+#torchvision==0.26.0
 wandb==0.25.0
