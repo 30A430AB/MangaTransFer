@@ -67,7 +67,7 @@ def configure_logging():
 
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
 
-class MangaTranslationPipeline:
+class MangaTransFerPipeline:
     """漫画重嵌处理流水线"""
     
     def __init__(self, raw_dir, text_dir, model_path, inpaint_algorithm='patchmatch', output_dir=None, automatch=True):
@@ -396,7 +396,7 @@ def main():
     
     try:
         # 创建并运行流水线（输出目录默认为生肉目录）
-        pipeline = MangaTranslationPipeline(
+        pipeline = MangaTransFerPipeline(
             raw_dir=args.raw_dir,
             text_dir=args.text_dir,
             model_path=model_path,

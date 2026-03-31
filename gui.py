@@ -7,7 +7,7 @@ import io
 import base64
 import tempfile
 from core.inpainting import Inpainter
-from cli import MangaTranslationPipeline
+from cli import MangaTransFerPipeline
 import asyncio
 import concurrent.futures
 import multiprocessing
@@ -57,7 +57,7 @@ def run_inpainter_sync(img_bytes: bytes, mask_bytes: bytes, algorithm: str) -> b
 
 def run_pipeline(raw_dir, text_dir, algorithm):
     try:
-        pipeline = MangaTranslationPipeline(
+        pipeline = MangaTransFerPipeline(
             raw_dir=raw_dir,
             text_dir=text_dir,
             model_path='data/models/comictextdetector.pt',
@@ -295,9 +295,9 @@ def show_new_project_dialog():
                     if not raw_dir or not text_dir:
                         ui.notify('请填写原图和文本目录', type='warning')
                         return
-                    algo = current_algorithm
-                    if algo == 'patch_match':
-                        algo = 'patchmatch'
+                    algo = 'patchmatch'
+                    # if algo == 'patch_match':
+                    #     algo = 'patchmatch'
                     dialog.close()
                     loading_dialog.open()
                     success, result = await run.io_bound(run_pipeline, raw_dir, text_dir, algo)
