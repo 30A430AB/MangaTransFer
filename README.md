@@ -1,4 +1,4 @@
-# MangaTransFer
+# MangaTransFer - 漫画翻译移植
 
 带露折花，色香自然要好得多；昔时不能够，今以朝花夕拾，终可为之。
 
@@ -51,4 +51,4 @@ python gui.py
 - [comic-text-detector](https://github.com/dmMaze/comic-text-detector)
 - [patchmatch](https://github.com/vacancy/PyPatchMatch) [修改版](https://github.com/dmMaze/PyPatchMatchInpaint)
 - [lama](https://github.com/advimman/lama) [微调版](https://huggingface.co/dreMaz/AnimeMangaInpainting) [simple-lama-inpainting](https://github.com/enesmsahin/simple-lama-inpainting)
-- [resnet18](https://github.com/pytorch/vision)
+- [resnet18](https://github.com/pytorch/vision) 
