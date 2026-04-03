@@ -394,7 +394,7 @@ def extract_features(image_paths, model, transform, device, batch_size=32):
     features = np.vstack(features)
     return features, valid_paths
 
-def match_images(raw_dir, text_dir, model_weights_path, batch_size=32, device=None):
+def match_images(raw_dir, text_dir, model_weights_path, batch_size=32, device=None, generate_thumbnails=False):
     """
     匹配 raw 图片和 text 图片，返回匹配结果列表。
 
@@ -404,21 +404,65 @@ def match_images(raw_dir, text_dir, model_weights_path, batch_size=32, device=No
         model_weights_path (str): ResNet18 预训练权重文件路径
         batch_size (int): 特征提取时的批大小，默认为 32
         device (str, optional): 计算设备 ('cuda' 或 'cpu')，默认自动选择
+        generate_thumbnails (bool): 是否生成缩略图，默认 False。若为 True，则在 text_dir/thumb 下生成缩略图，
+                                    并将缩略图路径添加到返回结果中。
 
     返回：
         list: 匹配结果列表，每个元素为字典，包含以下字段：
             - 'raw_path': raw 图片的原始路径
             - 'text_path': 匹配到的 text 图片的路径
             - 'similarity': 余弦相似度
+            - 'raw_thumbnail_path': (可选) raw 图片的缩略图路径，仅当 generate_thumbnails=True 时存在
+            - 'text_thumbnail_path': (可选) text 图片的缩略图路径，仅当 generate_thumbnails=True 时存在
     """
     if device is None:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    raw_images = [os.path.join(raw_dir, f) for f in os.listdir(raw_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff'))]
-    text_images = [os.path.join(text_dir, f) for f in os.listdir(text_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff'))]
+    raw_images = [os.path.join(raw_dir, f) for f in os.listdir(raw_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    text_images = [os.path.join(text_dir, f) for f in os.listdir(text_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
 
     if not raw_images or not text_images:
         raise ValueError("No images found in one of the directories.")
+
+    # 缩略图生成
+    raw_thumb_map = {}
+    text_thumb_map = {}
+    if generate_thumbnails:
+        thumb_dir = os.path.join(raw_dir, 'temp', 'thumb')
+        os.makedirs(thumb_dir, exist_ok=True)
+
+        # 生成 raw 缩略图
+        for raw_path in raw_images:
+            filename = os.path.basename(raw_path)
+            name_without_ext = os.path.splitext(filename)[0]
+            thumb_name = f"thumb_raw_{name_without_ext}.jpg"
+            thumb_path = os.path.join(thumb_dir, thumb_name)
+            try:
+                img = Image.open(raw_path)
+                img.thumbnail((150, 150))
+                # 转换为 RGB 模式（JPEG 不支持透明）
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                img.save(thumb_path, 'JPEG', quality=85)
+                raw_thumb_map[raw_path] = thumb_path
+            except Exception as e:
+                print(f"生成 raw 缩略图失败 {raw_path}: {e}")
+
+        # 生成 text 缩略图
+        for text_path in text_images:
+            filename = os.path.basename(text_path)
+            name_without_ext = os.path.splitext(filename)[0]
+            thumb_name = f"thumb_text_{name_without_ext}.jpg"
+            thumb_path = os.path.join(thumb_dir, thumb_name)
+            try:
+                img = Image.open(text_path)
+                img.thumbnail((150, 150))
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                img.save(thumb_path, 'JPEG', quality=85)
+                text_thumb_map[text_path] = thumb_path
+            except Exception as e:
+                print(f"生成 text 缩略图失败 {text_path}: {e}")
 
     model = load_model(model_weights_path, device)
     transform = get_transform()
@@ -438,10 +482,16 @@ def match_images(raw_dir, text_dir, model_weights_path, batch_size=32, device=No
         best_idx = np.argmax(sim_matrix[i])
         best_sim = sim_matrix[i, best_idx]
         text_path = text_valid[best_idx]
-        matches.append({
+
+        result_item = {
             'raw_path': raw_path,
             'text_path': text_path,
             'similarity': best_sim
-        })
+        }
+        if generate_thumbnails:
+            result_item['raw_thumbnail_path'] = raw_thumb_map.get(raw_path, None)
+            result_item['text_thumbnail_path'] = text_thumb_map.get(text_path, None)
+
+        matches.append(result_item)
 
     return matches

@@ -427,3 +427,195 @@ window.goToNextPage = function() {
     const nextKey = keys[currentIndex + 1];
     loadImage(nextKey, window.projectDirectory);
 };
+
+// ==================== 匹配结果面板交互 ====================
+window.initMatchResultPanel = function(textDir, thumbDir) {
+    window.textDir = textDir;
+    window.thumbDir = thumbDir;
+
+    var currentRow = null;
+    var modal = null;
+
+    function createModal() {
+        if (modal) return modal;
+        modal = document.createElement('div');
+        modal.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); display:none; justify-content:center; align-items:center; z-index:10000;';
+        modal.innerHTML = '<div style="background:white; border-radius:12px; width:80%; max-width:800px; max-height:80%; display:flex; flex-direction:column; overflow:hidden;">' +
+            '<h3 style="text-align:center; margin:16px 0 8px 0; font-size:16px;">选择文本图片</h3>' +
+            '<div id="thumb-grid" class="modern-scrollbar" style="flex:1; overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(120px,1fr)); gap:12px; padding:0 20px 20px 20px;"></div>' +
+            '<div style="display:flex; justify-content:center; gap:20px; padding:16px 20px; border-top:1px solid #eee;">' +
+            '<button id="cancel-btn" style="padding:8px 24px; background:#f0f0f0; border:none; border-radius:4px; cursor:pointer;">取消</button>' +
+            '<button id="confirm-btn" style="padding:8px 24px; background:#007bff; color:white; border:none; border-radius:4px; cursor:pointer;">确定</button>' +
+            '</div></div>';
+        document.body.appendChild(modal);
+        modal.querySelector('#cancel-btn').onclick = function() {
+            modal.style.display = 'none';
+            currentRow = null;
+        };
+        modal.querySelector('#confirm-btn').onclick = async function() {
+            try {
+                var selectedDiv = modal.querySelector('.thumb-selected');
+                if (!selectedDiv) {
+                    alert('请选择一个文本图片');
+                    return;
+                }
+                var originalFileName = selectedDiv.getAttribute('data-original-filename');
+                var fullTextPath = selectedDiv.getAttribute('data-full-path');
+                var finalImageUrl = selectedDiv.getAttribute('data-image-url');
+                if (!originalFileName || !fullTextPath || !finalImageUrl) {
+                    alert('数据错误');
+                    return;
+                }
+                if (currentRow) {
+                    var wrapper = currentRow.querySelector('.thumb-wrapper');
+                    var imgEl = wrapper.querySelector('img');
+                    var nameLabel = currentRow.querySelector('.text-col .text-xs');
+                    if (nameLabel) nameLabel.innerText = originalFileName;
+                    if (imgEl) {
+                        imgEl.src = finalImageUrl;
+                        imgEl.style.backgroundImage = 'none';
+                        imgEl.style.objectFit = '';
+                        imgEl.style.height = '150px';
+                        imgEl.style.width = 'auto';
+                    }
+                    wrapper.dataset.deleted = 'false';
+                    imgEl.onclick = null;
+                    
+                    var rawPath = currentRow.getAttribute('data-raw-path');
+                    fetch('/update_match_text', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ raw_path: rawPath, new_text_path: fullTextPath })
+                    }).then(function(res) { return res.json(); }).then(function(data) {
+                        if (!data.success) console.error('更新匹配失败', data);
+                    }).catch(function(err) { console.error('更新匹配出错', err); });
+                }
+                modal.style.display = 'none';
+                currentRow = null;
+            } catch (err) {
+                console.error('确认时出错:', err);
+                alert('操作失败，请重试');
+            }
+        };
+        return modal;
+    }
+
+    function getBestImageUrl(baseName, originalFileName) {
+        return new Promise(function(resolve) {
+            var thumbUrl = '/thumb/thumb_text_' + baseName + '.jpg';
+            var originalUrl = '/text_original/' + encodeURIComponent(originalFileName);
+            var testImg = new Image();
+            testImg.onload = function() { resolve(thumbUrl); };
+            testImg.onerror = function() { resolve(originalUrl); };
+            testImg.src = thumbUrl;
+        });
+    }
+
+    async function showImageSelector(row) {
+        try {
+            currentRow = row;
+            var modal = createModal();
+            var grid = modal.querySelector('#thumb-grid');
+            grid.innerHTML = '<div style="text-align:center;">加载中...</div>';
+            modal.style.display = 'flex';
+            try {
+                var response = await fetch('/get_text_images', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text_dir: window.textDir })
+                });
+                var data = await response.json();
+                if (data.error) throw new Error(data.error);
+                var files = data.files;
+                if (files.length === 0) {
+                    grid.innerHTML = '<div style="text-align:center;">没有可用的文本图片</div>';
+                    return;
+                }
+                grid.innerHTML = '';
+                var promises = files.map(function(file) {
+                    var baseName = file.replace(/\.[^/.]+$/, '');
+                    return getBestImageUrl(baseName, file).then(function(url) {
+                        return { file: file, url: url };
+                    });
+                });
+                var results = await Promise.all(promises);
+                for (var i = 0; i < results.length; i++) {
+                    var file = results[i].file;
+                    var bestUrl = results[i].url;
+                    var div = document.createElement('div');
+                    div.style.cssText = 'cursor:pointer; text-align:center; padding:4px; border:1px solid #ddd; border-radius:4px;';
+                    div.innerHTML = `<img src="${bestUrl}" style="width:100%; height:auto; max-height:100px; object-fit:contain;" onerror="this.src='${bestUrl}'" />`;
+                    (function(f, currentDiv, imgUrl) {
+                        currentDiv.onclick = function() {
+                            grid.querySelectorAll('.thumb-selected').forEach(function(el) { el.classList.remove('thumb-selected'); });
+                            currentDiv.classList.add('thumb-selected');
+                            currentDiv.style.borderColor = '#007bff';
+                            currentDiv.setAttribute('data-original-filename', f);
+                            currentDiv.setAttribute('data-full-path', window.textDir + '/' + f);
+                            currentDiv.setAttribute('data-image-url', imgUrl);
+                        };
+                    })(file, div, bestUrl);
+                    grid.appendChild(div);
+                }
+                if (!document.querySelector('#thumb-selected-style')) {
+                    var style = document.createElement('style');
+                    style.id = 'thumb-selected-style';
+                    style.textContent = '.thumb-selected { border-color: #007bff !important; background-color: #e7f3ff; }';
+                    document.head.appendChild(style);
+                }
+            } catch (err) {
+                console.error(err);
+                grid.innerHTML = '<div style="text-align:center;">加载失败</div>';
+            }
+        } catch (err) {
+            console.error('加载图片列表失败:', err);
+            var grid = modal.querySelector('#thumb-grid');
+            if (grid) grid.innerHTML = '<div style="text-align:center;">加载失败</div>';
+        }
+    }
+
+    // 为所有 .thumb-wrapper 绑定事件
+    document.querySelectorAll('.thumb-wrapper').forEach(function(wrapper) {
+        var img = wrapper.querySelector('img');
+        var delBtn = wrapper.querySelector('.del-btn');
+        wrapper.dataset.deleted = 'false';
+        
+        wrapper.addEventListener('mouseenter', function() {
+            if (wrapper.dataset.deleted === 'false') {
+                delBtn.style.display = 'flex';
+            }
+        });
+        wrapper.addEventListener('mouseleave', function() {
+            delBtn.style.display = 'none';
+        });
+        delBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (wrapper.dataset.deleted === 'true') return;
+            wrapper.dataset.deleted = 'true';
+            img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+            img.style.height = '150px';
+            img.style.width = 'auto';
+            img.style.objectFit = 'none';
+            img.style.backgroundImage = "url('/static/icons/add.svg')";
+            img.style.backgroundRepeat = 'no-repeat';
+            img.style.backgroundPosition = 'center';
+            img.style.backgroundSize = '24px 24px';
+            delBtn.style.display = 'none';
+            var nameLabel = wrapper.closest('.row') ? wrapper.closest('.row').querySelector('.text-col .text-xs') : null;
+            if (nameLabel) nameLabel.innerText = '';
+            img.onclick = function() {
+                if (wrapper.dataset.deleted === 'true') {
+                    var row = wrapper.closest('.row') || wrapper.closest('.flex-nowrap');
+                    showImageSelector(row);
+                }
+            };
+        });
+    });
+};
+
+// 更新算法标签
+window.updateAlgorithmLabel = function(algorithm) {
+    let el = document.getElementById('algorithm-selector');
+    if (el) el.innerText = algorithm;
+    window.currentAlgorithm = algorithm;
+};

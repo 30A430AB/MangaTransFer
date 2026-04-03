@@ -70,7 +70,8 @@ def configure_logging():
 class MangaTransFerPipeline:
     """漫画重嵌处理流水线"""
     
-    def __init__(self, raw_dir, text_dir, model_path, inpaint_algorithm='patchmatch', output_dir=None, automatch=True):
+    def __init__(self, raw_dir, text_dir, model_path, inpaint_algorithm='patchmatch', 
+                output_dir=None, automatch=True, generate_thumbnails=False, precomputed_matches=None):
         """
         初始化流水线
         
@@ -79,6 +80,9 @@ class MangaTransFerPipeline:
             text_dir: 熟肉图片目录  
             model_path: 模型路径
             output_dir: 输出目录，默认为生肉目录
+            automatch: 是否自动匹配图片（若 precomputed_matches 提供，则忽略此参数）
+            generate_thumbnails: 是否生成缩略图（仅在自动匹配时有效）
+            precomputed_matches: 预计算的匹配结果列表（GUI 传入），格式与 match_images 返回值相同
         """
         self.raw_dir = Path(raw_dir)
         self.text_dir = Path(text_dir)
@@ -86,21 +90,14 @@ class MangaTransFerPipeline:
         self.inpaint_algorithm = inpaint_algorithm
         self.output_dir = Path(output_dir) if output_dir else self.raw_dir
         self.automatch = automatch
+        self.generate_thumbnails = generate_thumbnails
+        self.precomputed_matches = precomputed_matches
         
         # 设置日志
         self.logger = logger.bind(name='MangaPipeline')
         
         # 创建输出目录
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
-    # def _setup_logging(self):
-    #     """设置日志格式"""
-    #     logging.basicConfig(
-    #         level=logging.INFO,
-    #         format='%(asctime)s - %(levelname)s - %(message)s',
-    #         datefmt='%H:%M:%S'
-    #     )
-    #     return logging.getLogger('MangaPipeline')
     
     def _get_sorted_images(self, directory):
         """获取自然排序的图片文件列表"""
@@ -132,49 +129,19 @@ class MangaTransFerPipeline:
         return dirs
     
     def step1_resize_images(self, directories):
-        """步骤1: 复制熟肉图片到工作目录，并根据 automatch 标志决定是否重命名匹配"""
+        """步骤1: 复制熟肉图片到工作目录，并根据预计算匹配或 automatch 决定重命名"""
         self.logger.info("步骤1: 复制熟肉图片并调整尺寸")
         
         src_dir = self.text_dir
         dst_dir = directories['temp']
         dst_dir.mkdir(parents=True, exist_ok=True)
         
-        if not self.automatch:
-            # 直接复制所有熟肉图片
-            text_images = self._get_sorted_images(src_dir)
-            if not text_images:
-                raise Exception(f"熟肉目录中没有图片文件: {src_dir}")
-            
-            copied = 0
-            for img_path in text_images:
-                dst_path = dst_dir / img_path.name
-                import shutil
-                shutil.copy2(img_path, dst_path)
-                copied += 1
-                self.logger.info(f"已复制: {img_path.name}")
-            
-            if copied == 0:
-                raise Exception("没有成功复制任何熟肉图片")
-            self.logger.info(f"已复制 {copied} 张熟肉图片到工作目录: {dst_dir}")
-        else:
-            # 自动匹配：根据图像相似度匹配并重命名复制
-            self.logger.info("启用自动匹配模式，正在计算图片相似度...")
-            
-            # 检查匹配模型是否存在
-            match_model_path = Path("data/models/resnet18-f37072fd.pth")
-            if not match_model_path.exists():
-                raise Exception(f"匹配模型不存在: {match_model_path}\n")
-            
-            # 调用匹配模块，获取生肉→熟肉的对应关系
-            matches = match_images(
-                raw_dir=str(self.raw_dir),
-                text_dir=str(src_dir),
-                model_weights_path=str(match_model_path)
-            )
-            
+        # 优先使用 GUI 传入的预计算匹配结果
+        if self.precomputed_matches is not None:
+            self.logger.info("使用 GUI 传入的预计算匹配结果...")
+            matches = self.precomputed_matches
             if not matches:
-                raise Exception("图片匹配失败，未获得任何匹配结果")
-            
+                raise Exception("预计算的匹配结果为空")
             copied = 0
             for match in matches:
                 raw_path = Path(match['raw_path'])
@@ -183,15 +150,62 @@ class MangaTransFerPipeline:
                 text_suffix = text_path.suffix    # 熟肉扩展名（如 .png）
                 target_name = raw_stem + text_suffix
                 dst_path = dst_dir / target_name
-                
                 import shutil
                 shutil.copy2(text_path, dst_path)
                 copied += 1
                 self.logger.info(f"匹配: {text_path.name} -> {target_name}")
-            
             if copied == 0:
                 raise Exception("没有成功复制任何匹配的熟肉图片")
             self.logger.info(f"已复制 {copied} 张匹配后的熟肉图片到工作目录: {dst_dir}")
+        
+        elif self.automatch:
+            # 自动匹配模式：根据图像相似度匹配并重命名复制
+            self.logger.info("启用自动匹配模式，正在计算图片相似度...")
+            match_model_path = Path("data/models/resnet18-f37072fd.pth")
+            if not match_model_path.exists():
+                raise Exception(f"匹配模型不存在: {match_model_path}")
+            
+            matches = match_images(
+                raw_dir=str(self.raw_dir),
+                text_dir=str(src_dir),
+                model_weights_path=str(match_model_path),
+                generate_thumbnails=self.generate_thumbnails
+            )
+            if not matches:
+                raise Exception("图片匹配失败，未获得任何匹配结果")
+            
+            copied = 0
+            for match in matches:
+                raw_path = Path(match['raw_path'])
+                text_path = Path(match['text_path'])
+                raw_stem = raw_path.stem
+                text_suffix = text_path.suffix
+                target_name = raw_stem + text_suffix
+                dst_path = dst_dir / target_name
+                import shutil
+                shutil.copy2(text_path, dst_path)
+                copied += 1
+                self.logger.info(f"匹配: {text_path.name} -> {target_name}")
+            if copied == 0:
+                raise Exception("没有成功复制任何匹配的熟肉图片")
+            self.logger.info(f"已复制 {copied} 张匹配后的熟肉图片到工作目录: {dst_dir}")
+        
+        else:
+            # 直接复制所有熟肉图片（不重命名）
+            self.logger.info("未启用自动匹配，直接复制所有熟肉图片...")
+            text_images = self._get_sorted_images(src_dir)
+            if not text_images:
+                raise Exception(f"熟肉目录中没有图片文件: {src_dir}")
+            copied = 0
+            for img_path in text_images:
+                dst_path = dst_dir / img_path.name
+                import shutil
+                shutil.copy2(img_path, dst_path)
+                copied += 1
+                self.logger.info(f"已复制: {img_path.name}")
+            if copied == 0:
+                raise Exception("没有成功复制任何熟肉图片")
+            self.logger.info(f"已复制 {copied} 张熟肉图片到工作目录: {dst_dir}")
         
         # 更新 self.text_dir 指向工作目录
         self.text_dir = dst_dir
@@ -368,14 +382,14 @@ class MangaTransFerPipeline:
 
 def main():
     """命令行主函数"""
-    parser = argparse.ArgumentParser(description='漫画翻译自动嵌字工具')
+    parser = argparse.ArgumentParser(description='漫画翻译移植工具')
     parser.add_argument('raw_dir', help='原始图片目录路径')
     parser.add_argument('text_dir', help='文本图片目录路径')
-    parser.add_argument('--inpaint-algorithm', '-i', default='patchmatch', choices=['patchmatch', 'lama_large_512px'],
-                        help='修复算法 (patchmatch 或 lama_large_512px)')
+    # parser.add_argument('--inpaint-algorithm', '-i', default='patchmatch', choices=['patchmatch', 'lama_large_512px'],
+    #                     help='修复算法 (patchmatch 或 lama_large_512px)')
     parser.add_argument('--automatch', default='true', choices=['true', 'false'],
-                    help='是否自动匹配原始图片与文本图片（基于图像相似度）')
-    
+                    help='是否自动匹配图片')
+    parser.add_argument('--thumbnails', action='store_true')
     args = parser.parse_args()
     
     # 检查输入目录
@@ -400,9 +414,10 @@ def main():
             raw_dir=args.raw_dir,
             text_dir=args.text_dir,
             model_path=model_path,
-            inpaint_algorithm=args.inpaint_algorithm,
+            # inpaint_algorithm=args.inpaint_algorithm,
             output_dir=None,  # 使用默认（生肉目录）
             automatch=(args.automatch.lower() == 'true'),
+            generate_thumbnails=args.thumbnails, 
         )
         pipeline.run()
       

@@ -6,11 +6,14 @@ import os
 import io
 import base64
 import tempfile
-from core.inpainting import Inpainter
-from cli import MangaTransFerPipeline
 import asyncio
 import concurrent.futures
 import multiprocessing
+from natsort import natsorted
+from core.matching import match_images
+from core.inpainting import Inpainter
+from cli import MangaTransFerPipeline
+
 
 
 # ==================== 全局设置 ====================
@@ -19,6 +22,7 @@ multiprocessing.set_start_method('spawn', force=True)
 
 # 创建进程池（全局单例）
 process_pool = concurrent.futures.ProcessPoolExecutor(max_workers=1)
+final_matches = None
 
 async def run_inpainter_in_process(img_bytes, mask_bytes, algorithm):
     """在独立进程中执行修复"""
@@ -62,7 +66,7 @@ def run_pipeline(raw_dir, text_dir, algorithm):
             text_dir=text_dir,
             model_path='data/models/comictextdetector.pt',
             inpaint_algorithm=algorithm,
-            output_dir=None
+            output_dir=None,
         )
         pipeline.run()
         return True, raw_dir
@@ -194,6 +198,7 @@ def generate_text_blocks(directory, page_key, entries):
     return text_blocks
 
 def get_project_data(directory, pages, current_img):
+    # 查找当前图片文件名
     img_filename = None
     for ext in IMAGE_EXTS:
         potential_path = os.path.join(directory, current_img + ext)
@@ -202,53 +207,87 @@ def get_project_data(directory, pages, current_img):
             break
     if not img_filename:
         raise Exception(f'Image not found for {current_img} in {directory}')
-    with open(os.path.join(directory, img_filename), 'rb') as f:
-        img_data = f.read()
-    img_base64 = base64.b64encode(img_data).decode('utf-8')
-    ext = img_filename.split('.')[-1].lower()
-    if ext == 'jpg':
-        ext = 'jpeg'
-    mime_type = f'image/{ext}'
-    image_url = f'data:{mime_type};base64,{img_base64}'
-    inpainted_url = None
+
+    # ---------- 挂载原始图片目录静态路由 ----------
+    if not hasattr(app, '_project_raw_mounts'):
+        app._project_raw_mounts = {}
+    if directory not in app._project_raw_mounts:
+        import hashlib
+        dir_hash = hashlib.md5(directory.encode()).hexdigest()[:8]
+        raw_mount_path = f"/raw_{dir_hash}"
+        app.add_static_files(raw_mount_path, directory)
+        app._project_raw_mounts[directory] = raw_mount_path
+    raw_mount = app._project_raw_mounts[directory]
+    image_url = f"{raw_mount}/{img_filename}"
+
+    # ---------- 挂载 inpainted 目录静态路由 ----------
     inpainted_dir = os.path.join(directory, 'inpainted')
-    if os.path.exists(inpainted_dir):
-        for ext in IMAGE_EXTS:
-            inpainted_path = os.path.join(inpainted_dir, current_img + ext)
-            if os.path.exists(inpainted_path):
-                with open(inpainted_path, 'rb') as f:
-                    img_data = f.read()
-                img_base64 = base64.b64encode(img_data).decode('utf-8')
-                ext = inpainted_path.split('.')[-1].lower()
-                if ext == 'jpg':
-                    ext = 'jpeg'
-                mime_type = f'image/{ext}'
-                inpainted_url = f'data:{mime_type};base64,{img_base64}'
-                break
+    if not hasattr(app, '_project_inpainted_mounts'):
+        app._project_inpainted_mounts = {}
+    if directory not in app._project_inpainted_mounts:
+        import hashlib
+        dir_hash = hashlib.md5(directory.encode()).hexdigest()[:8]
+        inpainted_mount_path = f"/inpainted_{dir_hash}"
+        os.makedirs(inpainted_dir, exist_ok=True)
+        app.add_static_files(inpainted_mount_path, inpainted_dir)
+        app._project_inpainted_mounts[directory] = inpainted_mount_path
+    inpainted_mount = app._project_inpainted_mounts[directory]
+    inpainted_url = None
+    for ext in IMAGE_EXTS:
+        potential_path = os.path.join(inpainted_dir, current_img + ext)
+        if os.path.exists(potential_path):
+            inpainted_url = f"{inpainted_mount}/{current_img}{ext}"
+            break
+
+    # ---------- 缩略图处理（保持不变）----------
+    thumb_dir = os.path.join(directory, 'temp', 'thumb')
+    if not hasattr(app, '_thumb_dirs'):
+        app._thumb_dirs = set()
+    if thumb_dir not in app._thumb_dirs:
+        os.makedirs(thumb_dir, exist_ok=True)
+        app.add_static_files('/thumb', thumb_dir)
+        app._thumb_dirs.add(thumb_dir)
+
     thumbnails = []
     for key in pages.keys():
-        img_filename = None
+        raw_img_path = None
         for ext in IMAGE_EXTS:
             potential_path = os.path.join(directory, key + ext)
             if os.path.exists(potential_path):
-                img_filename = key + ext
+                raw_img_path = potential_path
                 break
-        if img_filename:
-            with Image.open(os.path.join(directory, img_filename)) as img:
-                img.thumbnail((200, 200))
-                if img.mode in ('RGBA', 'LA', 'P'):
-                    background = Image.new('RGB', img.size, (255, 255, 255))
-                    if img.mode == 'P':
-                        img = img.convert('RGBA')
-                    background.paste(img, mask=img.split()[-1])
-                    img = background
-                elif img.mode != 'RGB':
-                    img = img.convert('RGB')
-                buffer = io.BytesIO()
-                img.save(buffer, format='JPEG', quality=85)
-                thumb_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-                thumb_url = f'data:image/jpeg;base64,{thumb_base64}'
-                thumbnails.append({'key': key, 'thumb_url': thumb_url})
+        if not raw_img_path:
+            continue
+
+        thumb_filename = f"thumb_raw_{key}.jpg"
+        thumb_path = os.path.join(thumb_dir, thumb_filename)
+
+        if not os.path.exists(thumb_path):
+            try:
+                with Image.open(raw_img_path) as img:
+                    w, h = img.size
+                    new_h = 150
+                    new_w = int(w * new_h / h)
+                    img.thumbnail((new_w, new_h), Image.Resampling.LANCZOS)
+                    if img.mode in ('RGBA', 'LA', 'P'):
+                        background = Image.new('RGB', img.size, (255, 255, 255))
+                        if img.mode == 'P':
+                            img = img.convert('RGBA')
+                        if img.mode == 'RGBA':
+                            background.paste(img, mask=img.split()[-1])
+                        else:
+                            background.paste(img)
+                        img = background
+                    elif img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    img.save(thumb_path, 'JPEG', quality=85)
+            except Exception as e:
+                print(f"生成缩略图失败 {key}: {e}")
+                continue
+
+        thumb_url = f'/thumb/{thumb_filename}'
+        thumbnails.append({'key': key, 'thumb_url': thumb_url})
+
     text_blocks = generate_text_blocks(directory, current_img, pages[current_img])
     return {
         'directory': directory,
@@ -270,7 +309,7 @@ current_algorithm = 'patch_match'
 ui.add_head_html('<link rel="stylesheet" href="/static/styles.css">')
 ui.add_head_html('<script src="/static/fabric.min.js"></script>')
 ui.add_head_html('<script src="/static/canvas.js"></script>')
-ui.add_head_html('<script src="/static/load_project.js"></script>')
+ui.add_head_html('<script src="/static/view.js"></script>')
 
 IMAGE_EXTS = ['.jpg', '.JPG', '.jpeg', '.JPEG', '.png', '.PNG']
 
@@ -290,33 +329,177 @@ def show_new_project_dialog():
                     .props('id="text-dir-input"')
             with ui.row().classes('w-full justify-center gap-4 mt-4'):
                 async def on_start():
+                    # 1. 基础校验
                     raw_dir = raw_input.value.strip()
                     text_dir = text_input.value.strip()
                     if not raw_dir or not text_dir:
                         ui.notify('请填写原图和文本目录', type='warning')
                         return
-                    algo = 'patchmatch'
-                    # if algo == 'patch_match':
-                    #     algo = 'patchmatch'
+                    # 校验匹配模型
+                    match_model_path = os.path.join("data", "models", "resnet18-f37072fd.pth")
+                    if not os.path.exists(match_model_path):
+                        ui.notify(f'匹配模型不存在: {match_model_path}', type='negative')
+                        return
+
+                    # 2. 关闭输入框，显示加载遮罩
                     dialog.close()
                     loading_dialog.open()
-                    success, result = await run.io_bound(run_pipeline, raw_dir, text_dir, algo)
-                    loading_dialog.close()
-                    if success:
-                        raw_dir = result
-                        json_path = os.path.join(raw_dir, 'match_results.json')
-                        if not os.path.exists(json_path):
-                            ui.notify('处理完成，但未找到 match_results.json', type='warning')
+
+                    try:
+                        # 3. 异步执行图片匹配
+                        matches = await run.io_bound(
+                            match_images,
+                            raw_dir=raw_dir,
+                            text_dir=text_dir,
+                            model_weights_path=match_model_path,
+                            generate_thumbnails=True
+                        )
+                        if not matches:
+                            ui.notify('图片匹配失败，未获得任何匹配结果', type='negative')
+                            loading_dialog.close()
                             return
-                        with open(json_path, 'r', encoding='utf-8') as f:
-                            project_data = json.load(f)
-                        ui.run_javascript(f'window.loadProjectFromData({json.dumps(project_data)});')
-                        ui.notify('项目加载成功', type='positive')
-                    else:
-                        ui.notify(result, type='negative')
+
+                        # 4. 按raw文件名自然排序
+                        sorted_matches = natsorted(matches, key=lambda x: os.path.basename(x['raw_path']))
+                        loading_dialog.close()
+
+                        # 5. 弹出匹配结果面板
+                        await show_match_result_panel(sorted_matches, raw_dir, text_dir)
+
+                    except Exception as e:
+                        loading_dialog.close()
+                        ui.notify(f'匹配过程出错: {str(e)}', type='negative')
+
                 ui.button('开始', on_click=on_start).props('outline').classes('w-24')
                 ui.button('取消', on_click=dialog.close).props('outline').classes('w-24')
     dialog.open()
+
+
+async def show_match_result_panel(matches, raw_dir, text_dir):
+    global final_matches
+    final_matches = matches
+    app.storage.general['final_matches'] = matches
+
+    # 挂载缩略图静态目录
+    thumb_dir = os.path.join(raw_dir, 'temp', 'thumb')
+    if not hasattr(app, '_thumb_dirs'):
+        app._thumb_dirs = set()
+    if thumb_dir not in app._thumb_dirs:
+        app.add_static_files('/thumb', thumb_dir)
+        app._thumb_dirs.add(thumb_dir)
+
+    # 创建主对话框
+    with ui.dialog(value=True).props('persistent') as result_dialog, ui.card().style('width: 85vw; max-width: 1200px; max-height: 85vh;'):
+        ui.label('图片匹配结果').classes('text-h6 w-full text-center mb-3')
+        with ui.scroll_area().style('height: calc(85vh - 160px); width: 100%;'):
+            with ui.row().classes('w-full flex-nowrap items-center p-2 bg-gray-100 sticky top-0 z-10'):
+                ui.label('原始图片').classes('w-1/3 text-center font-bold')
+                ui.label('文本图片').classes('w-1/3 text-center font-bold')
+                ui.label('相似度').classes('w-1/3 text-center font-bold')
+            matches_container = ui.column().classes('w-full')
+        with ui.row().classes('w-full justify-center gap-4 mt-4'):
+            ui.button('取消', on_click=result_dialog.close).props('outline').classes('w-28')
+            continue_btn = ui.button('继续', color='primary').classes('w-28')
+
+    # 分批添加匹配行
+    BATCH_SIZE = 15
+    for i in range(0, len(matches), BATCH_SIZE):
+        batch = matches[i:i+BATCH_SIZE]
+        for match in batch:
+            raw_thumb_name = os.path.basename(match.get('raw_thumbnail_path', ''))
+            text_thumb_name = os.path.basename(match.get('text_thumbnail_path', ''))
+            raw_thumb_url = f'/thumb/{raw_thumb_name}' if raw_thumb_name else None
+            text_thumb_url = f'/thumb/{text_thumb_name}' if text_thumb_name else None
+
+            raw_path = match['raw_path']
+            original_text_path = match['text_path']
+
+            with matches_container:
+                with ui.row().classes('w-full flex-nowrap items-stretch p-3 border-b hover:bg-gray-50').props(f'data-raw-path="{raw_path}" data-original-text-path="{original_text_path}"'):
+                    # 原始图片列
+                    with ui.column().classes('w-1/3 items-center gap-1'):
+                        if raw_thumb_url:
+                            ui.html(f'<img src="{raw_thumb_url}" style="width: auto; height: 150px;" />')
+                        else:
+                            ui.label('缩略图缺失').style('height: 150px;')
+                        ui.label(os.path.basename(match['raw_path'])).classes('text-xs text-gray-600 text-center w-full break-all')
+
+                    # 文本图片列
+                    with ui.column().classes('w-1/3 items-center gap-1 text-col'):
+                        if text_thumb_url:
+                            wrapper = ui.html(f'''
+                                <div class="thumb-wrapper" style="position: relative; display: inline-block;">
+                                    <img src="{text_thumb_url}" style="width: auto; height: 150px; display: block;" />
+                                    <div class="del-btn" style="position: absolute; top: 0; right: 0; width: 36px; height: 36px; background-color: #f08080; clip-path: polygon(100% 0, 0 0, 100% 100%); display: none; align-items: center; justify-content: center; cursor: pointer;">
+                                        <img src="/static/icons/close.svg" width="18" height="18" style="filter: brightness(0) invert(1); position: relative; left: 8px; top: -8px;">
+                                    </div>
+                                </div>
+                            ''')
+                        else:
+                            ui.label('缩略图缺失').style('height: 150px;')
+                        ui.label(os.path.basename(match['text_path'])).classes('text-xs text-gray-600 text-center w-full break-all')
+
+                    # 相似度列
+                    with ui.column().classes('w-1/3 items-center justify-center'):
+                        sim = match['similarity']
+                        color = 'text-green-600' if sim >= 0.8 else 'text-orange-600' if sim >= 0.6 else 'text-red-600'
+                        ui.label(f'{sim:.4f}').classes(f'text-lg font-bold {color}')
+        await asyncio.sleep(0)
+
+    await ui.run_javascript(f'window.initMatchResultPanel("{text_dir}", "{thumb_dir}");')
+
+    # 为原始图片添加静态路由（使 /text_original/xxx.png 能访问到 text_dir 下的文件）
+    if not hasattr(app, '_text_original_mounted'):
+        app.add_static_files('/text_original', text_dir)
+        app._text_original_mounted = True
+
+        async def on_continue():
+            result_dialog.close()
+            try:
+                # 确保 final_matches 是最新的（可能已被更新）
+                current_matches = app.storage.general.get('final_matches', final_matches)
+                if not current_matches:
+                    ui.notify('匹配数据丢失，请重新匹配', type='negative')
+                    return
+                
+                algo_map = {
+                    'patch_match': 'patchmatch',
+                    'lama_large_512px': 'lama_large_512px'
+                }
+                backend_algorithm = algo_map.get(current_algorithm, 'patchmatch')
+
+                pipeline = MangaTransFerPipeline(
+                    raw_dir=raw_dir,
+                    text_dir=text_dir,
+                    model_path='data/models/comictextdetector.pt',
+                    inpaint_algorithm=backend_algorithm,
+                    output_dir=None,
+                    automatch=False,
+                    generate_thumbnails=False,
+                    precomputed_matches=current_matches
+                )
+                
+                loading_dialog.open()
+                try:
+                    # 直接等待流水线完成（在后台线程运行，不阻塞事件循环）
+                    await run.io_bound(pipeline.run)
+                    # 处理完成后，加载匹配结果 JSON 并显示在画布上
+                    json_path = os.path.join(raw_dir, 'match_results.json')
+                    if os.path.exists(json_path):
+                        with open(json_path, 'r', encoding='utf-8') as f:
+                            project_data = json.load(f)
+                        ui.run_javascript(f'window.loadProjectFromData({json.dumps(project_data)});')
+                        ui.notify('处理完成，项目已加载', type='positive')
+                    else:
+                        ui.notify('处理完成，但未找到 match_results.json', type='warning')
+                except Exception as e:
+                    ui.notify(f'处理失败: {str(e)}', type='negative')
+                finally:
+                    loading_dialog.close()
+            except Exception as e:
+                ui.notify(f'启动流水线失败: {str(e)}', type='negative')
+        
+        continue_btn.on('click', on_continue)
 
 loading_dialog = ui.dialog().props('persistent').classes('bg-transparent')
 with loading_dialog, ui.card().classes('items-center justify-center').style('width: 300px; height: 200px;'):
@@ -414,11 +597,7 @@ with ui.element('div').classes('fixed top-0 left-0 w-full h-full').style('margin
                                     current_algorithm = 'lama_large_512px'
                                 else:
                                     current_algorithm = 'patch_match'
-                                ui.run_javascript(f'''
-                                    let el = document.getElementById('algorithm-selector');
-                                    el.innerText = '{current_algorithm}';
-                                    window.currentAlgorithm = '{current_algorithm}';
-                                ''')
+                                ui.run_javascript(f'window.updateAlgorithmLabel("{current_algorithm}");')
                             algorithm_label.on('click', toggle_algorithm)
                     with ui.element('div').style('height:calc(100% - 40px); margin:0; padding:0;').props('name="canvas"'):
                         with ui.element('div').props('id="canvas-container"').style('width:100%; height:100%; position:relative; overflow:hidden;'):
@@ -463,6 +642,57 @@ with ui.element('div').classes('fixed top-0 left-0 w-full h-full').style('margin
                         pass
 
 # ==================== 路由处理函数 ====================
+@app.post('/get_text_images')
+async def get_text_images(request: Request):
+    """返回 text_dir 下的所有图片文件"""
+    data = await request.json()
+    text_dir = data.get('text_dir')
+    if not text_dir or not os.path.exists(text_dir):
+        return {'error': 'text_dir 不存在'}
+    IMG_EXTS = {'.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG'}
+    files = [f for f in os.listdir(text_dir) if os.path.splitext(f)[1] in IMG_EXTS]
+    files = natsorted(files)
+    return {'files': files}
+
+@app.post('/update_match_text')
+async def update_match_text(request: Request):
+    try:
+        data = await request.json()
+        raw_path = data.get('raw_path')
+        new_text_path = data.get('new_text_path')
+        
+        # 从存储中获取匹配列表
+        final_matches = app.storage.general.get('final_matches')
+
+        if final_matches is None:
+            return {'error': '没有匹配数据，请重新进行图片匹配'}
+        
+        for match in final_matches:
+            if match['raw_path'] == raw_path:
+                match['text_path'] = new_text_path
+                match['text_thumbnail_path'] = None
+                
+                # 同步更新存储中的列表
+                app.storage.general['final_matches'] = final_matches
+                return {'success': True}
+        return {'error': '未找到匹配项'}
+    except Exception as e:
+        return {'error': str(e)}
+
+@app.post('/get_text_thumbnails')
+async def get_text_thumbnails(request: Request):
+    try:
+        data = await request.json()
+        thumb_dir = data.get('thumb_dir')
+        if not thumb_dir or not os.path.exists(thumb_dir):
+            return {'error': 'thumb目录不存在'}
+        files = [f for f in os.listdir(thumb_dir) if f.startswith('thumb_text_')]
+        files = natsorted(files)
+        return {'files': files}
+    except Exception as e:
+        print(f"获取缩略图列表失败: {e}")
+        return {'error': str(e)}
+
 @app.post('/load_project')
 async def load_project(request: Request):
     data = await request.json()
@@ -694,21 +924,30 @@ async def get_working_image(request: Request):
     working_dir = os.path.join(directory, 'temp')
     if not os.path.exists(working_dir):
         return {'error': 'temp directory not found'}
+
+    # 查找工作图片文件（支持多种扩展名）
+    img_filename = None
     for ext in IMAGE_EXTS:
         potential_path = os.path.join(working_dir, key + ext)
         if os.path.exists(potential_path):
-            try:
-                with open(potential_path, 'rb') as f:
-                    img_data = f.read()
-                img_base64 = base64.b64encode(img_data).decode('utf-8')
-                ext = potential_path.split('.')[-1].lower()
-                if ext == 'jpg':
-                    ext = 'jpeg'
-                mime_type = f'image/{ext}'
-                return {'imageUrl': f'data:{mime_type};base64,{img_base64}'}
-            except Exception as e:
-                return {'error': f'Failed to read working image: {str(e)}'}
-    return {'error': f'Working image not found for {key}'}
+            img_filename = key + ext
+            break
+    if not img_filename:
+        return {'error': f'Working image not found for {key}'}
+
+    # 挂载 working_dir 静态路由
+    if not hasattr(app, '_working_dir_mounts'):
+        app._working_dir_mounts = {}
+    if directory not in app._working_dir_mounts:
+        import hashlib
+        dir_hash = hashlib.md5(directory.encode()).hexdigest()[:8]
+        mount_path = f"/working_{dir_hash}"
+        app.add_static_files(mount_path, working_dir)
+        app._working_dir_mounts[directory] = mount_path
+    mount = app._working_dir_mounts[directory]
+    image_url = f"{mount}/{img_filename}"
+
+    return {'imageUrl': image_url}
 
 # ==================== 启动应用 ====================
 ui.run(

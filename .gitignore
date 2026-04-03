@@ -209,3 +209,4 @@ __marimo__/
 /data/libs/
 /data/models/
 /python3.10.6/
+.nicegui/
