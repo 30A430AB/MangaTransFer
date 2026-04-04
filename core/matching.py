@@ -198,6 +198,61 @@ def create_new_masks(match_result, raw_mask_dir, output_dir):
         except Exception as e:
             logger.error(f"创建页面 {page_name} 的新mask时出错: {str(e)}")
 
+def deduplicate_overlapping_boxes(boxes):
+    """
+    对重叠的文本框去重，保留面积最大的，其他的 matched 置为 0。
+    boxes: list of dict，每个 dict 应包含 'xyxy' 和 'matched'
+    """
+    # 只处理 matched == 1 且 xyxy 有效的框
+    n = len(boxes)
+    matched_indices = [i for i, b in enumerate(boxes) if b.get('matched') == 1 and b.get('xyxy') and len(b['xyxy']) == 4]
+    if len(matched_indices) <= 1:
+        return boxes
+
+    # 计算面积
+    areas = {}
+    for i in matched_indices:
+        x1, y1, x2, y2 = boxes[i]['xyxy']
+        areas[i] = (x2 - x1) * (y2 - y1)
+
+    # 使用并查集合并重叠的框
+    parent = list(range(n))
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    def union(x, y):
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[ry] = rx
+
+    for i in matched_indices:
+        for j in matched_indices:
+            if i >= j:
+                continue
+            xi1, yi1, xi2, yi2 = boxes[i]['xyxy']
+            xj1, yj1, xj2, yj2 = boxes[j]['xyxy']
+            # 检查矩形是否重叠
+            if xi1 < xj2 and xi2 > xj1 and yi1 < yj2 and yi2 > yj1:
+                union(i, j)
+
+    # 分组
+    groups = {}
+    for i in matched_indices:
+        root = find(i)
+        groups.setdefault(root, []).append(i)
+
+    # 每组只保留面积最大的
+    for group in groups.values():
+        if len(group) <= 1:
+            continue
+        max_idx = max(group, key=lambda idx: areas[idx])
+        for idx in group:
+            if idx != max_idx:
+                boxes[idx]['matched'] = 0
+    return boxes
+
 def match_and_create_masks(raw_annotations_path, text_annotations_path, output_path,
                           raw_mask_dir, new_mask_dir, status_callback=None):
     """
@@ -306,7 +361,7 @@ def match_and_create_masks(raw_annotations_path, text_annotations_path, output_p
                     "raw_xyxy": raw_boxes[jp_idx],
                     "matched": 1
                 }
-
+        page_results = deduplicate_overlapping_boxes(page_results)
         result["pages"][page_name] = page_results
 
     try:

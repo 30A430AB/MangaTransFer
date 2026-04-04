@@ -419,7 +419,7 @@ class MangaTransFerPipeline:
             self.step1_resize_images(directories)
             self.step2_detect_text(directories)
             match_output = self.step3_match_boxes(directories)
-            self.step4_adjust_coordinates(directories)
+            # self.step4_adjust_coordinates(directories)
             self.step5_extract_text(directories)
             self.step6_inpaint_raw(directories)
             self.step7_apply_text(match_output)
