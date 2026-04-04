@@ -4,8 +4,11 @@ import cv2
 import torch
 from pathlib import Path
 from PIL import Image
+
 from simple_lama_inpainting import SimpleLama
+
 from .patch_match import inpaint as patch_match_inpaint
+from .config import DataPaths, InpaintAlgorithm
 
 
 class Inpainter:
@@ -15,7 +18,7 @@ class Inpainter:
                 output_path: str = "result.png",
                 dilate_iterations: int = 3,
                 kernel_size: int = 3,
-                algorithm: str = "patchmatch",
+                algorithm: str = InpaintAlgorithm.PATCHMATCH,
                 debug: bool = False,
                 do_dilate: bool = False):
         
@@ -30,12 +33,12 @@ class Inpainter:
         self.do_dilate = do_dilate
         
         # 初始化算法组件
-        if self.algorithm == "lama_large_512px":
-            self.model_path = Path("data/models/anime-manga-big-lama.pt")
+        if self.algorithm == InpaintAlgorithm.LAMA:
+            self.model_path = DataPaths.LAMA
             os.environ["LAMA_MODEL"] = str(self.model_path)
             device = "cuda" if torch.cuda.is_available() else "cpu"
             self.simple_lama = SimpleLama(device=device)
-        elif self.algorithm == "patchmatch":
+        elif self.algorithm == InpaintAlgorithm.PATCHMATCH:
             self._init_patchmatch()
         
         self.process()
@@ -75,10 +78,12 @@ class Inpainter:
 
     def _execute_inpaint(self):
         """执行修复的核心方法"""
-        if self.algorithm == "lama_large_512px":
+        if self.algorithm == InpaintAlgorithm.LAMA:
             return self._run_lama()
-        elif self.algorithm == "patchmatch":
+        elif self.algorithm == InpaintAlgorithm.PATCHMATCH:
             return self._run_patchmatch()
+        else:
+            raise ValueError(f"Unknown algorithm: {self.algorithm}")
 
     def _run_lama(self):
         """LaMa算法实现"""

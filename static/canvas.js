@@ -94,7 +94,7 @@ function initCanvas() {
     updateZoomDisplay();
     bindCanvasEvents();
     switchTool('drag');
-    window.currentAlgorithm = 'patch_match';
+    window.currentAlgorithm = window.ALGO_PATCHMATCH;
 }
 
 function switchTool(tool) {
@@ -495,7 +495,7 @@ function onCanvasMouseUp(opt) {
                 formData.append('y', Math.round(y));
                 formData.append('w', Math.round(w));
                 formData.append('h', Math.round(h));
-                const algorithm = window.currentAlgorithm || 'patch_match';
+                const algorithm = window.currentAlgorithm || window.ALGO_PATCHMATCH;
                 formData.append('algorithm', algorithm);
 
                 const response = await fetch('/process_rect_inpaint', {
@@ -905,7 +905,7 @@ async function onPathCreated(e) {
             const formData = new FormData();
             formData.append('image', dataURItoBlob(subImageDataURL), 'image.png');
             formData.append('mask', dataURItoBlob(subMaskDataURL), 'mask.png');
-            const algorithm = window.currentAlgorithm || 'patch_match';
+            const algorithm = window.currentAlgorithm || window.ALGO_PATCHMATCH;
             formData.append('algorithm', algorithm);
 
             const response = await fetch('/process_inpaint', { method: 'POST', body: formData });

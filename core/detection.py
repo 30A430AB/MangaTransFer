@@ -10,7 +10,7 @@ class ComicTextDetector:
         save_dir: str,
         model_path: str,
         save_json: bool = True,
-        device: str = 'cuda',
+        device: str = 'cpu',
         logger: Optional[logging.Logger] = None,
         status_callback: Optional[Callable] = None
     ):

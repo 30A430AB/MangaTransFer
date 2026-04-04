@@ -7,24 +7,23 @@ import cv2
 import torch
 from pathlib import Path
 import torch
+from typing import Optional, Union
+
 from .utils.yolov5_utils import non_max_suppression
 from .utils.db_utils import SegDetectorRepresenter
 from .utils.io_utils import imread, imwrite, find_all_imgs, NumpyEncoder
 from .utils.imgproc_utils import letterbox, xyxy2yolo
 from .utils.textblock import group_output
 from .utils.textmask import refine_mask, refine_undetected_mask, REFINEMASK_INPAINT, REFINEMASK_ANNOTATION
-from pathlib import Path
-from typing import Optional, Union
+from core.config import SUPPORTED_EXTENSIONS
 
 
-def safe_get_images(directory):
-    """遍历目录获取所有图片文件）"""
-    image_extensions = {'.jpg', '.jpeg', '.png'}
+def get_images(directory):
     files = []
     try:
         for entry in Path(directory).iterdir():
-            if entry.is_file() and entry.suffix.lower() in image_extensions:
-                files.append(str(entry.resolve()))  # 返回绝对路径字符串
+            if entry.is_file() and entry.suffix.lower() in SUPPORTED_EXTENSIONS:
+                files.append(str(entry.resolve()))
     except FileNotFoundError:
         pass
     return files
@@ -46,7 +45,7 @@ def model2annotations(model_path, img_dir_list, save_dir, save_json=False, progr
     
     imglist = []
     for img_dir in img_dir_list:
-        imglist += safe_get_images(img_dir)
+        imglist += get_images(img_dir)
     
     total = len(imglist)
     for idx, img_path in enumerate(imglist):

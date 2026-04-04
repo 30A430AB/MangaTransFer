@@ -11,35 +11,6 @@ body, html, #__nuxt, #__nuxt-container {
     background-color: #F5F7FA;
 }
 
-.modern-scrollbar::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-}
-
-.modern-scrollbar::-webkit-scrollbar-track {
-    background: rgba(245, 247, 250, 0.8);
-    border-radius: 4px;
-}
-
-.modern-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(224, 224, 224, 0.6);
-    border-radius: 4px;
-    transition: background 0.3s ease;
-}
-
-.modern-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: rgba(74, 144, 226, 0.6);
-}
-
-.modern-scrollbar::-webkit-scrollbar-thumb:active {
-    background: rgba(74, 144, 226, 0.8);
-}
-
-.modern-scrollbar {
-    scrollbar-width: thin;
-    scrollbar-color: rgba(224, 224, 224, 0.6) rgba(245, 247, 250, 0.8);
-}
-
 .thumbnail-container {
     padding: 12px 8px;
     display: flex;
@@ -63,7 +34,7 @@ body, html, #__nuxt, #__nuxt-container {
 
 .thumbnail-card:hover {
     border: 1px solid #66ccff;
-    transform: translateY(-4px);
+    /* transform: translateY(-4px); */
     box-shadow: 0 4px 12px rgba(74, 144, 226, 0.1);
 }
 
@@ -209,4 +180,30 @@ body, html, #__nuxt, #__nuxt-container {
 
 .tool-button .q-icon {
     font-size: 24px !important;
+}
+
+/* ==================== 全局滚动条样式（统一现代风格） ==================== */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: rgba(245, 247, 250, 0.8);
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb {
+    background: rgba(224, 224, 224, 0.6);
+    border-radius: 4px;
+    transition: background 0.3s ease;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(74, 144, 226, 0.6);
+}
+::-webkit-scrollbar-thumb:active {
+    background: rgba(74, 144, 226, 0.8);
+}
+/* Firefox 滚动条样式 */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(224, 224, 224, 0.6) rgba(245, 247, 250, 0.8);
 }

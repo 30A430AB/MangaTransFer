@@ -1,5 +1,6 @@
 import json
-from nicegui import ui, app, run
+from pathlib import Path
+from nicegui import ui, app, run, events
 from fastapi import Request
 from PIL import Image
 import os
@@ -10,10 +11,11 @@ import asyncio
 import concurrent.futures
 import multiprocessing
 from natsort import natsorted
+
 from core.matching import match_images
 from core.inpainting import Inpainter
+from core.config import SUPPORTED_EXTENSIONS, DirPaths, DataPaths, InpaintAlgorithm
 from cli import MangaTransFerPipeline
-
 
 
 # ==================== 全局设置 ====================
@@ -58,21 +60,6 @@ def run_inpainter_sync(img_bytes: bytes, mask_bytes: bytes, algorithm: str) -> b
         )
         with open(out_path, 'rb') as f:
             return f.read()
-
-def run_pipeline(raw_dir, text_dir, algorithm):
-    try:
-        pipeline = MangaTransFerPipeline(
-            raw_dir=raw_dir,
-            text_dir=text_dir,
-            model_path='data/models/comictextdetector.pt',
-            inpaint_algorithm=algorithm,
-            output_dir=None,
-        )
-        pipeline.run()
-        return True, raw_dir
-    except Exception as e:
-        error_msg = str(e).encode('ascii', errors='replace').decode('ascii')
-        return False, f"处理失败: {error_msg}"
 
 def sync_rect_inpaint_worker(img_bytes: bytes, x: int, y: int, w: int, h: int, backend_algo: str) -> bytes:
     import io
@@ -236,16 +223,17 @@ def get_project_data(directory, pages, current_img):
     for ext in IMAGE_EXTS:
         potential_path = os.path.join(inpainted_dir, current_img + ext)
         if os.path.exists(potential_path):
-            inpainted_url = f"{inpainted_mount}/{current_img}{ext}"
+            mtime = int(os.path.getmtime(potential_path))
+            inpainted_url = f"{inpainted_mount}/{current_img}{ext}?t={mtime}"
             break
 
     # ---------- 缩略图处理（保持不变）----------
-    thumb_dir = os.path.join(directory, 'temp', 'thumb')
+    thumb_dir = os.path.join(directory, DirPaths.THUMBS)
     if not hasattr(app, '_thumb_dirs'):
         app._thumb_dirs = set()
     if thumb_dir not in app._thumb_dirs:
         os.makedirs(thumb_dir, exist_ok=True)
-        app.add_static_files('/thumb', thumb_dir)
+        app.add_static_files('/thumbs', thumb_dir)
         app._thumb_dirs.add(thumb_dir)
 
     thumbnails = []
@@ -285,7 +273,7 @@ def get_project_data(directory, pages, current_img):
                 print(f"生成缩略图失败 {key}: {e}")
                 continue
 
-        thumb_url = f'/thumb/{thumb_filename}'
+        thumb_url = f'/thumbs/{thumb_filename}'
         thumbnails.append({'key': key, 'thumb_url': thumb_url})
 
     text_blocks = generate_text_blocks(directory, current_img, pages[current_img])
@@ -304,14 +292,20 @@ def get_project_data(directory, pages, current_img):
 ui.page_title('MangaTransFer')
 app.add_static_files('/static', 'static')
 
-current_algorithm = 'patch_match'
+current_algorithm = InpaintAlgorithm.PATCHMATCH
 
 ui.add_head_html('<link rel="stylesheet" href="/static/styles.css">')
 ui.add_head_html('<script src="/static/fabric.min.js"></script>')
 ui.add_head_html('<script src="/static/canvas.js"></script>')
 ui.add_head_html('<script src="/static/view.js"></script>')
+ui.add_head_html(f'''
+<script>
+    window.ALGO_PATCHMATCH = "{InpaintAlgorithm.PATCHMATCH}";
+    window.ALGO_LAMA = "{InpaintAlgorithm.LAMA}";
+</script>
+''')
 
-IMAGE_EXTS = ['.jpg', '.JPG', '.jpeg', '.JPEG', '.png', '.PNG']
+IMAGE_EXTS = list(SUPPORTED_EXTENSIONS) + [ext.upper() for ext in SUPPORTED_EXTENSIONS]
 
 def show_new_project_dialog():
     with ui.dialog() as dialog, ui.card().style('min-width: 400px;'):
@@ -322,21 +316,34 @@ def show_new_project_dialog():
                 raw_input = ui.input(placeholder='输入原始图片目录路径')\
                     .classes('flex-grow')\
                     .props('id="raw-dir-input"')
+                # 浏览按钮
+                async def pick_raw():
+                    picker = local_dir_picker(raw_input.value or '.')
+                    path = await picker
+                    if path:
+                        raw_input.value = path
+                ui.button('浏览', on_click=pick_raw).props('flat dense').classes('h-9 px-3')
             with ui.row().classes('w-full items-center gap-2'):
                 ui.label('文本:').classes('w-10 text-right')
                 text_input = ui.input(placeholder='输入文本图片目录路径')\
                     .classes('flex-grow')\
                     .props('id="text-dir-input"')
+                async def pick_text():
+                    picker = local_dir_picker(text_input.value or '.')
+                    path = await picker
+                    if path:
+                        text_input.value = path
+                ui.button('浏览', on_click=pick_text).props('flat dense').classes('h-9 px-3')
             with ui.row().classes('w-full justify-center gap-4 mt-4'):
                 async def on_start():
                     # 1. 基础校验
                     raw_dir = raw_input.value.strip()
                     text_dir = text_input.value.strip()
                     if not raw_dir or not text_dir:
-                        ui.notify('请填写原图和文本目录', type='warning')
+                        ui.notify('请填写原图和文本图片目录路径', type='warning')
                         return
                     # 校验匹配模型
-                    match_model_path = os.path.join("data", "models", "resnet18-f37072fd.pth")
+                    match_model_path = str(DataPaths.RESNET18)
                     if not os.path.exists(match_model_path):
                         ui.notify(f'匹配模型不存在: {match_model_path}', type='negative')
                         return
@@ -370,8 +377,8 @@ def show_new_project_dialog():
                         loading_dialog.close()
                         ui.notify(f'匹配过程出错: {str(e)}', type='negative')
 
-                ui.button('开始', on_click=on_start).props('outline').classes('w-24')
                 ui.button('取消', on_click=dialog.close).props('outline').classes('w-24')
+                ui.button('开始', on_click=on_start).props('outline').classes('w-24')
     dialog.open()
 
 
@@ -381,11 +388,11 @@ async def show_match_result_panel(matches, raw_dir, text_dir):
     app.storage.general['final_matches'] = matches
 
     # 挂载缩略图静态目录
-    thumb_dir = os.path.join(raw_dir, 'temp', 'thumb')
+    thumb_dir = os.path.join(raw_dir, DirPaths.THUMBS)
     if not hasattr(app, '_thumb_dirs'):
         app._thumb_dirs = set()
     if thumb_dir not in app._thumb_dirs:
-        app.add_static_files('/thumb', thumb_dir)
+        app.add_static_files('/thumbs', thumb_dir)
         app._thumb_dirs.add(thumb_dir)
 
     # 创建主对话框
@@ -408,8 +415,8 @@ async def show_match_result_panel(matches, raw_dir, text_dir):
         for match in batch:
             raw_thumb_name = os.path.basename(match.get('raw_thumbnail_path', ''))
             text_thumb_name = os.path.basename(match.get('text_thumbnail_path', ''))
-            raw_thumb_url = f'/thumb/{raw_thumb_name}' if raw_thumb_name else None
-            text_thumb_url = f'/thumb/{text_thumb_name}' if text_thumb_name else None
+            raw_thumb_url = f'/thumbs/{raw_thumb_name}' if raw_thumb_name else None
+            text_thumb_url = f'/thumbs/{text_thumb_name}' if text_thumb_name else None
 
             raw_path = match['raw_path']
             original_text_path = match['text_path']
@@ -449,57 +456,57 @@ async def show_match_result_panel(matches, raw_dir, text_dir):
     await ui.run_javascript(f'window.initMatchResultPanel("{text_dir}", "{thumb_dir}");')
 
     # 为原始图片添加静态路由（使 /text_original/xxx.png 能访问到 text_dir 下的文件）
+    # if not hasattr(app, '_text_original_mounted'):
+    #     app.add_static_files('/text_original', text_dir)
+    #     app._text_original_mounted = True
+
+        # 在 show_match_result_panel 函数中，创建 continue_btn 之后，添加以下代码
+
+    async def on_continue():
+        result_dialog.close()
+        try:
+            current_matches = app.storage.general.get('final_matches', final_matches)
+            if not current_matches:
+                ui.notify('匹配数据丢失，请重新匹配', type='negative')
+                return
+            
+            backend_algorithm = InpaintAlgorithm.PATCHMATCH
+            pipeline = MangaTransFerPipeline(
+                raw_dir=raw_dir,
+                text_dir=text_dir,
+                model_path=str(DataPaths.COMIC_TEXT_DETECTOR),
+                inpaint_algorithm=backend_algorithm,
+                output_dir=None,
+                automatch=False,
+                generate_thumbnails=False,
+                precomputed_matches=current_matches
+            )
+            
+            loading_dialog.open()
+            try:
+                await run.io_bound(pipeline.run)
+                json_path = os.path.join(raw_dir, 'match_results.json')
+                if os.path.exists(json_path):
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        project_data = json.load(f)
+                    ui.run_javascript(f'window.loadProjectFromData({json.dumps(project_data)});')
+                    ui.notify('处理完成，项目已加载', type='positive')
+                else:
+                    ui.notify('处理完成，但未找到 match_results.json', type='warning')
+            except Exception as e:
+                ui.notify(f'处理失败: {str(e)}', type='negative')
+            finally:
+                loading_dialog.close()
+        except Exception as e:
+            ui.notify(f'启动流水线失败: {str(e)}', type='negative')
+
+    # 绑定事件
+    continue_btn.on('click', on_continue)
+
+    # 静态路由只挂载一次（保持原样）
     if not hasattr(app, '_text_original_mounted'):
         app.add_static_files('/text_original', text_dir)
-        app._text_original_mounted = True
-
-        async def on_continue():
-            result_dialog.close()
-            try:
-                # 确保 final_matches 是最新的（可能已被更新）
-                current_matches = app.storage.general.get('final_matches', final_matches)
-                if not current_matches:
-                    ui.notify('匹配数据丢失，请重新匹配', type='negative')
-                    return
-                
-                algo_map = {
-                    'patch_match': 'patchmatch',
-                    'lama_large_512px': 'lama_large_512px'
-                }
-                backend_algorithm = algo_map.get(current_algorithm, 'patchmatch')
-
-                pipeline = MangaTransFerPipeline(
-                    raw_dir=raw_dir,
-                    text_dir=text_dir,
-                    model_path='data/models/comictextdetector.pt',
-                    inpaint_algorithm=backend_algorithm,
-                    output_dir=None,
-                    automatch=False,
-                    generate_thumbnails=False,
-                    precomputed_matches=current_matches
-                )
-                
-                loading_dialog.open()
-                try:
-                    # 直接等待流水线完成（在后台线程运行，不阻塞事件循环）
-                    await run.io_bound(pipeline.run)
-                    # 处理完成后，加载匹配结果 JSON 并显示在画布上
-                    json_path = os.path.join(raw_dir, 'match_results.json')
-                    if os.path.exists(json_path):
-                        with open(json_path, 'r', encoding='utf-8') as f:
-                            project_data = json.load(f)
-                        ui.run_javascript(f'window.loadProjectFromData({json.dumps(project_data)});')
-                        ui.notify('处理完成，项目已加载', type='positive')
-                    else:
-                        ui.notify('处理完成，但未找到 match_results.json', type='warning')
-                except Exception as e:
-                    ui.notify(f'处理失败: {str(e)}', type='negative')
-                finally:
-                    loading_dialog.close()
-            except Exception as e:
-                ui.notify(f'启动流水线失败: {str(e)}', type='negative')
-        
-        continue_btn.on('click', on_continue)
+    app._text_original_mounted = True
 
 loading_dialog = ui.dialog().props('persistent').classes('bg-transparent')
 with loading_dialog, ui.card().classes('items-center justify-center').style('width: 300px; height: 200px;'):
@@ -588,15 +595,15 @@ with ui.element('div').classes('fixed top-0 left-0 w-full h-full').style('margin
                                 .props('flat dense') \
                                 .on('click', lambda: ui.run_javascript('window.goToNextPage()'))
                         with ui.element('div').style('margin-left: auto; display: flex; align-items: center;'):
-                            algorithm_label = ui.label('patch_match') \
-                                .style('padding:4px 12px; background:#f0f0f0; border-radius:4px; cursor:pointer; font-size:14px;') \
+                            algorithm_label = ui.label(InpaintAlgorithm.PATCHMATCH) \
+                                .style('padding:4px 12px; min-width: 100px;text-align: center; background:#f0f0f0; border-radius:4px; cursor:pointer; font-size:14px;') \
                                 .props('id="algorithm-selector"')
                             def toggle_algorithm():
                                 global current_algorithm
-                                if current_algorithm == 'patch_match':
-                                    current_algorithm = 'lama_large_512px'
+                                if current_algorithm == InpaintAlgorithm.PATCHMATCH:
+                                    current_algorithm = InpaintAlgorithm.LAMA
                                 else:
-                                    current_algorithm = 'patch_match'
+                                    current_algorithm = InpaintAlgorithm.PATCHMATCH
                                 ui.run_javascript(f'window.updateAlgorithmLabel("{current_algorithm}");')
                             algorithm_label.on('click', toggle_algorithm)
                     with ui.element('div').style('height:calc(100% - 40px); margin:0; padding:0;').props('name="canvas"'):
@@ -641,15 +648,92 @@ with ui.element('div').classes('fixed top-0 left-0 w-full h-full').style('margin
                     with ui.element('div').props('id="text-block-list"').style('padding:8px;'):
                         pass
 
+class local_dir_picker(ui.dialog):
+    """本地目录选择器，允许用户导航并选择一个目录"""
+
+    def __init__(self, directory: str, upper_limit: str | None = None):
+        super().__init__()
+        self.path = Path(directory).expanduser().resolve()
+        self.upper_limit = Path(upper_limit).expanduser().resolve() if upper_limit else None
+        with self, ui.card().style('min-width: 400px;'):
+            self.grid = ui.aggrid({
+                'columnDefs': [
+                    {'field': 'name', 'headerName': '目录', 'resizable': False}
+                ],
+                'rowSelection': 'single',
+                'defaultColDef': {
+                    'resizable': False,
+                    'sortable': False,
+                    'filter': False
+                },
+            }, html_columns=[0]).classes('w-full').style('height: 400px;').on('cellDoubleClicked', self._handle_double_click)
+            with ui.row().classes('w-full justify-end'):
+                ui.button('取消', on_click=self.close).props('outline')
+                ui.button('选择', on_click=self._handle_ok)
+        self._update_grid()
+
+    def _update_grid(self):
+        row_data = []
+        # 上级目录（..）
+        can_go_up = False
+        if self.upper_limit is None:
+            can_go_up = self.path != self.path.parent
+        else:
+            can_go_up = self.path != self.upper_limit
+        if can_go_up:
+            row_data.append({
+                'name': '<i class="material-icons" style="font-size:16px;">folder</i> 上级目录',
+                'path': str(self.path.parent)
+            })
+
+        # 子目录
+        try:
+            items = [p for p in self.path.glob('*') if p.is_dir()]
+        except PermissionError:
+            items = []
+        items.sort(key=lambda p: p.name.lower())
+        for p in items:
+            if p == self.path.parent:
+                continue
+            row_data.append({
+                'name': f'<i class="material-icons" style="font-size:16px;">folder</i> {p.name}',
+                'path': str(p)
+            })
+
+        self.grid.options['rowData'] = row_data
+        self.grid.update()
+
+    def _handle_double_click(self, e: events.GenericEventArguments):
+        """双击目录：进入该目录，并清除选中状态"""
+        try:
+            new_path = Path(e.args['data']['path'])
+            # 防止超出上限
+            if self.upper_limit is not None and new_path == self.upper_limit.parent:
+                pass
+            self.path = new_path
+            # 清除所有选中行
+            self.grid.run_grid_method('forEachNode', 'function(node) { node.setSelected(false); }')
+            self._update_grid()
+        except Exception as ex:
+            print(f"目录跳转失败: {ex}")
+
+    async def _handle_ok(self):
+        """确认选择：优先使用选中的行，否则使用当前路径"""
+        selected_rows = await self.grid.get_selected_rows()
+        if selected_rows:
+            selected_path = selected_rows[0]['path']
+            self.submit(selected_path)
+        else:
+            self.submit(str(self.path))
+
 # ==================== 路由处理函数 ====================
 @app.post('/get_text_images')
 async def get_text_images(request: Request):
-    """返回 text_dir 下的所有图片文件"""
     data = await request.json()
     text_dir = data.get('text_dir')
     if not text_dir or not os.path.exists(text_dir):
         return {'error': 'text_dir 不存在'}
-    IMG_EXTS = {'.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG'}
+    IMG_EXTS = set(SUPPORTED_EXTENSIONS) | {ext.upper() for ext in SUPPORTED_EXTENSIONS}
     files = [f for f in os.listdir(text_dir) if os.path.splitext(f)[1] in IMG_EXTS]
     files = natsorted(files)
     return {'files': files}
@@ -713,50 +797,53 @@ async def get_image(request: Request):
     directory = data.get('directory')
     key = data.get('key')
     entries = data.get('entries', [])
-    # print(f"/get_image called: key={key}, entries count={len(entries)}")
     if not directory or not key:
         return {'error': 'Missing directory or key'}
-    original_url = None
+
+    # 查找当前图片文件名
     img_filename = None
     for ext in IMAGE_EXTS:
         potential_path = os.path.join(directory, key + ext)
         if os.path.exists(potential_path):
             img_filename = key + ext
             break
-    if img_filename:
-        try:
-            with open(os.path.join(directory, img_filename), 'rb') as f:
-                img_data = f.read()
-            img_base64 = base64.b64encode(img_data).decode('utf-8')
-            ext = img_filename.split('.')[-1].lower()
-            if ext == 'jpg':
-                ext = 'jpeg'
-            mime_type = f'image/{ext}'
-            original_url = f'data:{mime_type};base64,{img_base64}'
-        except Exception as e:
-            return {'error': f'Failed to read original image: {str(e)}'}
-    else:
+    if not img_filename:
         return {'error': f'Original image not found for {key}'}
-    inpainted_url = None
+
+    # ---------- 挂载原始图片目录静态路由 ----------
+    if not hasattr(app, '_project_raw_mounts'):
+        app._project_raw_mounts = {}
+    if directory not in app._project_raw_mounts:
+        import hashlib
+        dir_hash = hashlib.md5(directory.encode()).hexdigest()[:8]
+        raw_mount_path = f"/raw_{dir_hash}"
+        app.add_static_files(raw_mount_path, directory)
+        app._project_raw_mounts[directory] = raw_mount_path
+    raw_mount = app._project_raw_mounts[directory]
+    original_url = f"{raw_mount}/{img_filename}"
+
+    # ---------- 挂载 inpainted 目录静态路由 ----------
     inpainted_dir = os.path.join(directory, 'inpainted')
+    inpainted_url = None
     if os.path.exists(inpainted_dir):
+        if not hasattr(app, '_project_inpainted_mounts'):
+            app._project_inpainted_mounts = {}
+        if directory not in app._project_inpainted_mounts:
+            import hashlib
+            dir_hash = hashlib.md5(directory.encode()).hexdigest()[:8]
+            inpainted_mount_path = f"/inpainted_{dir_hash}"
+            os.makedirs(inpainted_dir, exist_ok=True)
+            app.add_static_files(inpainted_mount_path, inpainted_dir)
+            app._project_inpainted_mounts[directory] = inpainted_mount_path
+        inpainted_mount = app._project_inpainted_mounts[directory]
         for ext in IMAGE_EXTS:
             potential_path = os.path.join(inpainted_dir, key + ext)
             if os.path.exists(potential_path):
-                try:
-                    with open(potential_path, 'rb') as f:
-                        img_data = f.read()
-                    img_base64 = base64.b64encode(img_data).decode('utf-8')
-                    ext = potential_path.split('.')[-1].lower()
-                    if ext == 'jpg':
-                        ext = 'jpeg'
-                    mime_type = f'image/{ext}'
-                    inpainted_url = f'data:{mime_type};base64,{img_base64}'
-                except Exception as e:
-                    print(f"读取 inpainted 图片失败 {key}: {e}")
+                mtime = int(os.path.getmtime(potential_path))
+                inpainted_url = f"{inpainted_mount}/{key}{ext}?t={mtime}"
                 break
+
     text_blocks = generate_text_blocks(directory, key, entries)
-    # print(f"Generated {len(text_blocks)} text blocks")
     return {
         'originalImageUrl': original_url,
         'inpaintedImageUrl': inpainted_url,
@@ -768,18 +855,12 @@ async def process_inpaint(request: Request):
     form = await request.form()
     image_file = form.get('image')
     mask_file = form.get('mask')
-    algorithm = form.get('algorithm', 'patch_match')
+    algorithm = form.get('algorithm', InpaintAlgorithm.PATCHMATCH)
     if not image_file or not mask_file:
         return {'error': '缺少图片或掩码'}
-    algo_map = {
-        'patch_match': 'patchmatch',
-        'lama_large_512px': 'lama_large_512px'
-    }
-    backend_algo = algo_map.get(algorithm, 'patchmatch')
     img_bytes = await image_file.read()
     mask_bytes = await mask_file.read()
-    # 使用进程池执行
-    result_bytes = await run_inpainter_in_process(img_bytes, mask_bytes, backend_algo)
+    result_bytes = await run_inpainter_in_process(img_bytes, mask_bytes, algorithm)
     encoded = base64.b64encode(result_bytes).decode('utf-8')
     return {'imageUrl': f'data:image/png;base64,{encoded}'}
 
@@ -791,17 +872,12 @@ async def process_rect_inpaint(request: Request):
     y = int(form.get('y'))
     w = int(form.get('w'))
     h = int(form.get('h'))
-    algorithm = form.get('algorithm', 'patch_match')
+    algorithm = form.get('algorithm', InpaintAlgorithm.PATCHMATCH)
     if not image_file or x is None or y is None or w is None or h is None:
         return {'error': '缺少图片或矩形坐标'}
-    algo_map = {
-        'patch_match': 'patchmatch',
-        'lama_large_512px': 'lama_large_512px'
-    }
-    backend_algo = algo_map.get(algorithm, 'patchmatch')
     img_bytes = await image_file.read()
     try:
-        result_bytes = await run_rect_inpainter_in_process(img_bytes, x, y, w, h, backend_algo)
+        result_bytes = await run_rect_inpainter_in_process(img_bytes, x, y, w, h, algorithm)
     except Exception as e:
         print(f"处理矩形修复时发生异常: {e}")
         return {'error': f'处理失败: {str(e)}'}

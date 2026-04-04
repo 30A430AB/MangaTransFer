@@ -16,10 +16,16 @@ from core.image_utils import (
     inpaint_raw_images,
     apply_text_to_inpainted_step
 )
+from core.config import (
+    SUPPORTED_EXTENSIONS,
+    DirPaths,
+    DataPaths,
+    InpaintAlgorithm
+)
 
 
 def configure_logging():
-    """配置 loguru 日志输出和重定向（仅在命令行模式下调用）"""
+    """配置 loguru 日志输出和重定向"""
     # 保存原始的 stdout/stderr
     original_stdout = sys.stdout
     original_stderr = sys.stderr
@@ -70,9 +76,9 @@ def configure_logging():
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
 
 class MangaTransFerPipeline:
-    """漫画重嵌处理流水线"""
+    """漫画翻译移植流水线"""
     
-    def __init__(self, raw_dir, text_dir, model_path, inpaint_algorithm='patchmatch', 
+    def __init__(self, raw_dir, text_dir, model_path, inpaint_algorithm=InpaintAlgorithm.PATCHMATCH, 
                 output_dir=None, automatch=True, generate_thumbnails=False, precomputed_matches=None):
         """
         初始化流水线
@@ -102,12 +108,10 @@ class MangaTransFerPipeline:
         self.output_dir.mkdir(parents=True, exist_ok=True)
     
     def _get_sorted_images(self, directory):
-        """获取自然排序的图片文件列表"""
-        image_extensions = {'.jpg', '.jpeg', '.png'}
         image_files = []
         try:
             for entry in Path(directory).iterdir():
-                if entry.is_file() and entry.suffix.lower() in image_extensions:
+                if entry.is_file() and entry.suffix.lower() in SUPPORTED_EXTENSIONS:
                     image_files.append(entry)
         except FileNotFoundError:
             pass
@@ -116,13 +120,13 @@ class MangaTransFerPipeline:
     def prepare_directories(self):
         """准备输出目录结构"""
         dirs = {
-			'temp': self.output_dir / "temp", # 调整后的熟肉图片
-            'text': self.output_dir / "temp" / "text",           # 文字提取输出
-            'raw_mask': self.output_dir  / "temp" / "raw_mask",   # 生肉检测输出
-            'text_mask': self.output_dir  / "temp" / "text_mask", # 熟肉检测输出
-            'new_mask': self.output_dir / "mask",       # 匹配后mask
-            'inpainted': self.output_dir / "inpainted", # 修复结果
-            'result': self.output_dir / "result",        # 最终结果
+			'temp': self.output_dir / DirPaths.TEMP,
+            'text': self.output_dir / DirPaths.TEXT,
+            'raw_mask': self.output_dir / DirPaths.RAW_MASK,
+            'text_mask': self.output_dir / DirPaths.TEXT_MASK,
+            'new_mask': self.output_dir / DirPaths.NEW_MASK,
+            'inpainted': self.output_dir / DirPaths.INPAINTED,
+            'result': self.output_dir / DirPaths.RESULT,
         }
         
         for dir_path in dirs.values():
@@ -131,21 +135,19 @@ class MangaTransFerPipeline:
         return dirs
     
     def step1_resize_images(self, directories):
-        """步骤1: 复制熟肉图片到工作目录，并根据预计算匹配或 automatch 决定重命名"""
-        # self.logger.info("[1/7] 预处理")
+        """步骤1: 复制熟肉图片到工作目录，并根据图片匹配结果重命名"""
 
         src_dir = self.text_dir
         dst_dir = directories['temp']
         dst_dir.mkdir(parents=True, exist_ok=True)
 
-        # ----- 复制阶段（无进度条，仅日志）-----
+        # ----- 复制阶段 -----
         if self.precomputed_matches is not None:
-            self.logger.info("使用 GUI 传入的预计算匹配结果...")
+            self.logger.info("使用 GUI 传入的匹配结果...")
             matches = self.precomputed_matches
             if not matches:
-                raise Exception("预计算的匹配结果为空")
+                raise Exception("匹配结果为空")
 
-            # copied = 0
             for match in matches:
                 text_path_str = match.get('text_path', '')
                 if not text_path_str or not Path(text_path_str).exists():
@@ -161,12 +163,10 @@ class MangaTransFerPipeline:
                 dst_path = dst_dir / target_name
                 import shutil
                 shutil.copy2(text_path, dst_path)
-            #     copied += 1
-            # self.logger.info(f"已复制 {copied} 张匹配后的文本图片到工作目录: {dst_dir}")
 
         elif self.automatch:
             self.logger.info("启用自动匹配模式，正在计算图片相似度...")
-            match_model_path = Path("data/models/resnet18-f37072fd.pth")
+            match_model_path = DataPaths.RESNET18
             if not match_model_path.exists():
                 raise Exception(f"匹配模型不存在: {match_model_path}")
 
@@ -179,7 +179,6 @@ class MangaTransFerPipeline:
             if not matches:
                 raise Exception("图片匹配失败，未获得任何匹配结果")
 
-            # copied = 0
             for match in matches:
                 raw_path = Path(match['raw_path'])
                 text_path = Path(match['text_path'])
@@ -189,27 +188,20 @@ class MangaTransFerPipeline:
                 dst_path = dst_dir / target_name
                 import shutil
                 shutil.copy2(text_path, dst_path)
-            #     copied += 1
-            # self.logger.info(f"已复制 {copied} 张匹配后的文本图片到工作目录: {dst_dir}")
-
         else:
-            self.logger.info("未启用自动匹配，直接复制所有文本图片...")
+            self.logger.info("未启用自动匹配，复制所有文本图片...")
             text_images = self._get_sorted_images(src_dir)
             if not text_images:
                 raise Exception(f"文本图片目录中没有图片文件: {src_dir}")
 
-            # copied = 0
             for img_path in text_images:
                 dst_path = dst_dir / img_path.name
                 import shutil
                 shutil.copy2(img_path, dst_path)
-            #     copied += 1
-            # self.logger.info(f"已复制 {copied} 张文本图片到工作目录: {dst_dir}")
 
-        # 更新 self.text_dir 指向工作目录
         self.text_dir = dst_dir
 
-        # ----- 调整尺寸阶段（显示进度条，单位为图片张数）-----
+        # ----- 调整尺寸阶段 -----
         raw_images = self._get_sorted_images(self.raw_dir)
         total_raw = len(raw_images)
         pbar = tqdm(total=total_raw, desc="预处理", unit="张",
@@ -229,7 +221,6 @@ class MangaTransFerPipeline:
     
     def step2_detect_text(self, directories):
         """步骤2: 文字检测（合并进度条）"""
-        # self.logger.info("[2/7] 文字检测")
 
         # 获取图片数量
         raw_images = self._get_sorted_images(self.raw_dir)
@@ -244,7 +235,6 @@ class MangaTransFerPipeline:
             pbar.update(1)
 
         # 检测生肉文字
-        # self.logger.info("检测原始图片文字...")
         raw_detector = ComicTextDetector(
             img_dir=str(self.raw_dir),
             save_dir=str(directories['raw_mask']),
@@ -257,7 +247,6 @@ class MangaTransFerPipeline:
         raw_detector.detect()
 
         # 检测熟肉文字
-        # self.logger.info("检测文本图片文字...")
         text_detector = ComicTextDetector(
             img_dir=str(self.text_dir),
             save_dir=str(directories['text_mask']),
@@ -270,12 +259,10 @@ class MangaTransFerPipeline:
         text_detector.detect()
 
         pbar.close()
-        # self.logger.info("文字检测完成")
         return True
     
     def step3_match_boxes(self, directories):
         """步骤3: 文本框匹配（带进度条）"""
-        # self.logger.info("[3/7] 文本框匹配")
 
         text_annotations = directories['text_mask'] / "annotations.json"
         raw_annotations = directories['raw_mask'] / "annotations.json"
@@ -304,12 +291,10 @@ class MangaTransFerPipeline:
         if not success:
             raise Exception("文本框匹配失败")
 
-        # self.logger.info("文本框匹配完成")
         return match_output
     
     def step4_adjust_coordinates(self, directories):
         """步骤4: 文本框坐标调整"""
-        # self.logger.info("[4/7] 文本框坐标调整")
 
         annotations_path = directories['text_mask'] / "annotations.json"
 
@@ -337,14 +322,11 @@ class MangaTransFerPipeline:
         adjuster.adjust_annotations()
 
         pbar.close()
-        # self.logger.info("坐标调整完成")
         return True
     
     def step5_extract_text(self, directories):
         """步骤5: 文字提取"""
-        # self.logger.info("[5/7] 文字提取")
 
-        # 获取需要处理的图片数量（基于 text_dir 中的图片）
         input_images = self._get_sorted_images(self.text_dir)
         total = len(input_images)
 
@@ -354,7 +336,7 @@ class MangaTransFerPipeline:
         def progress_callback(processed, total):
             pbar.update(1)
 
-        processed_count = extract_text_from_masks(
+        extract_text_from_masks(
             input_dir=str(self.text_dir),
             mask_dir=str(directories['text_mask']),
             output_dir=str(directories['text']),
@@ -363,13 +345,10 @@ class MangaTransFerPipeline:
         )
 
         pbar.close()
-        # 可选：保留简要完成日志，但进度条已显示100%
-        # self.logger.info(f"成功提取 {processed_count} 张图片的文字")
         return True
     
     def step6_inpaint_raw(self, directories):
         """步骤6: 图片修复"""
-        # self.logger.info("[6/7] 图片修复")
 
         # 获取需要修复的图片数量（基于 raw_dir 中的图片）
         raw_images = self._get_sorted_images(self.raw_dir)
@@ -393,18 +372,13 @@ class MangaTransFerPipeline:
 
         pbar.close()
 
-        elapsed_time = time.time() - start_time
-        # self.logger.info(f"修复图片耗时: {elapsed_time:.2f} 秒")
-
         if inpainted_count == 0:
             raise Exception("修复失败")
 
-        # self.logger.info(f"成功修复 {inpainted_count} 张图片")
         return True
     
     def step7_apply_text(self, match_output_path):
         """步骤7: 文字移植"""
-        # self.logger.info("[7/7] 文字移植")
 
         # 读取 JSON 获取页面总数
         import json
@@ -428,7 +402,6 @@ class MangaTransFerPipeline:
         if not success:
             raise Exception("文字移植失败")
 
-        # self.logger.info("文字移植完成")
         return True
     
     def run(self):
@@ -481,7 +454,7 @@ def main():
         return
     
     # 固定模型路径（默认位置）
-    model_path = Path("data/models/comictextdetector.pt")
+    model_path = DataPaths.COMIC_TEXT_DETECTOR
     if not model_path.exists():
         print(f"错误: 模型文件不存在 - {model_path}")
         print("请确保 comictextdetector.pt 模型文件存在于 data/models/ 目录下")

@@ -14,6 +14,9 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 from sklearn.metrics.pairwise import cosine_similarity
 
+from core.image_utils import get_image_files, find_image_file
+from core.config import DirPaths
+
 
 # ==================== 文本框匹配模块 ====================
 class TextBoxMatcher:
@@ -146,7 +149,7 @@ def create_new_masks(match_result, raw_mask_dir, output_dir):
     """
     根据匹配结果创建新的日漫mask，并根据图片尺寸自适应膨胀
     """
-    # logger.info("开始创建新的日漫mask...")
+
     os.makedirs(output_dir, exist_ok=True)
 
     for page_name, page_entries in match_result["pages"].items():
@@ -191,14 +194,9 @@ def create_new_masks(match_result, raw_mask_dir, output_dir):
             # 保存
             output_path = Path(output_dir) / f"mask-{page_name}.png"
             dilated_mask.save(output_path)
-            # logger.info(f"已创建膨胀后的mask: {output_path.name} (膨胀核大小={kernel_size})")
 
         except Exception as e:
             logger.error(f"创建页面 {page_name} 的新mask时出错: {str(e)}")
-
-    # logger.info("新mask创建完成！")
-
-
 
 def match_and_create_masks(raw_annotations_path, text_annotations_path, output_path,
                           raw_mask_dir, new_mask_dir, status_callback=None):
@@ -213,7 +211,6 @@ def match_and_create_masks(raw_annotations_path, text_annotations_path, output_p
         new_mask_dir: 新mask输出目录
         status_callback: 进度回调函数
     """
-    # logger.info("开始文本框匹配并创建新mask...")
 
     try:
         with open(raw_annotations_path, 'r', encoding='utf-8') as f:
@@ -254,24 +251,12 @@ def match_and_create_masks(raw_annotations_path, text_annotations_path, output_p
             status_callback(page_idx + 1, total_pages)
 
         if page_name not in text_json:
-            logger.warning(f"警告: 熟肉中未找到页面 {page_name}，跳过")
             result["pages"][page_name] = []
             continue
 
         try:
-            raw_image_path = None
-            for ext in ['.jpg', '.jpeg', '.png']:
-                potential_path = raw_dir / f"{page_name}{ext}"
-                if potential_path.exists():
-                    raw_image_path = potential_path
-                    break
-
-            text_image_path = None
-            for ext in ['.jpg', '.jpeg', '.png']:
-                potential_path = text_dir / f"{page_name}{ext}"
-                if potential_path.exists():
-                    text_image_path = potential_path
-                    break
+            raw_image_path = find_image_file(raw_dir, page_name)
+            text_image_path = find_image_file(text_dir, page_name)
 
             if not raw_image_path or not text_image_path:
                 logger.warning(f"警告: 未找到图片文件 {page_name}")
@@ -287,8 +272,6 @@ def match_and_create_masks(raw_annotations_path, text_annotations_path, output_p
             logger.error(f"获取图片尺寸失败 {page_name}: {e}")
             result["pages"][page_name] = []
             continue
-
-        # logger.info(f"页面 {page_name}: 生肉尺寸 {raw_size}, 熟肉尺寸 {text_size}")
 
         match_result = matcher.match_boxes(page_name, page_name, raw_size, text_size)
 
@@ -325,13 +308,10 @@ def match_and_create_masks(raw_annotations_path, text_annotations_path, output_p
                 }
 
         result["pages"][page_name] = page_results
-        matched_count = len([r for r in page_results if r['matched']])
-        # logger.info(f"页面 {page_name}: 匹配 {matched_count}/{len(page_results)} 个文本框")
 
     try:
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False, separators=(',', ':'))
-        # logger.info(f"匹配结果已保存到: {output_path}")
     except Exception as e:
         logger.error(f"保存匹配结果失败: {e}")
         return False
@@ -404,7 +384,7 @@ def match_images(raw_dir, text_dir, model_weights_path, batch_size=32, device=No
         model_weights_path (str): ResNet18 预训练权重文件路径
         batch_size (int): 特征提取时的批大小，默认为 32
         device (str, optional): 计算设备 ('cuda' 或 'cpu')，默认自动选择
-        generate_thumbnails (bool): 是否生成缩略图，默认 False。若为 True，则在 text_dir/thumb 下生成缩略图，
+        generate_thumbnails (bool): 是否生成缩略图，默认 False。若为 True，则在 text_dir/thumbs 下生成缩略图，
                                     并将缩略图路径添加到返回结果中。
 
     返回：
@@ -418,8 +398,8 @@ def match_images(raw_dir, text_dir, model_weights_path, batch_size=32, device=No
     if device is None:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    raw_images = [os.path.join(raw_dir, f) for f in os.listdir(raw_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-    text_images = [os.path.join(text_dir, f) for f in os.listdir(text_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    raw_images = [str(p) for p in get_image_files(Path(raw_dir))]
+    text_images = [str(p) for p in get_image_files(Path(text_dir))]
 
     if not raw_images or not text_images:
         raise ValueError("No images found in one of the directories.")
@@ -428,7 +408,7 @@ def match_images(raw_dir, text_dir, model_weights_path, batch_size=32, device=No
     raw_thumb_map = {}
     text_thumb_map = {}
     if generate_thumbnails:
-        thumb_dir = os.path.join(raw_dir, 'temp', 'thumb')
+        thumb_dir = os.path.join(raw_dir, DirPaths.THUMBS)
         os.makedirs(thumb_dir, exist_ok=True)
 
         # 生成 raw 缩略图
