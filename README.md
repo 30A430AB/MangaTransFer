@@ -15,9 +15,8 @@
   ```bash
 git clone https://github.com/30A430AB/MangaTransFer.git&&cd MangaTransFer
 ```
-2. 手动下载 [data](https://github.com/30A430AB/MangaTransFer/releases/download/v0.1.0/data.zip) 文件夹，解压后放于源码目录下的对应位置
 
-3. 安装依赖
+2. 安装依赖
 ```bash
 pip install -r requirements.txt
 ```
@@ -46,9 +45,10 @@ python gui.py
 
 ## 致谢
 
-本项目使用了以下开源项目
 - [BallonsTranslator](https://github.com/dmMaze/BallonsTranslator)
 - [comic-text-detector](https://github.com/dmMaze/comic-text-detector)
-- [patchmatch](https://github.com/vacancy/PyPatchMatch) [修改版](https://github.com/dmMaze/PyPatchMatchInpaint)
+- [PyPatchMatch](https://github.com/vacancy/PyPatchMatch) [修改版](https://github.com/dmMaze/PyPatchMatchInpaint)
 - [lama](https://github.com/advimman/lama) [微调版](https://huggingface.co/dreMaz/AnimeMangaInpainting) [simple-lama-inpainting](https://github.com/enesmsahin/simple-lama-inpainting)
 - [resnet18](https://github.com/pytorch/vision) 
+- [nicegui](https://github.com/zauberzeug/nicegui) 
+- [fabric.js](https://github.com/fabricjs/fabric.js) 

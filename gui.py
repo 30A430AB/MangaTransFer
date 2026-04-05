@@ -11,6 +11,19 @@ import asyncio
 import concurrent.futures
 import multiprocessing
 from natsort import natsorted
+import sys
+
+from core.config import ResourceManager
+
+def ensure_resources_before_import():
+    try:
+        ResourceManager.ensure_all()
+    except Exception as e:
+        print(f"资源准备失败: {e}")
+        sys.exit(1)
+
+ensure_resources_before_import()
+
 
 from core.matching import match_images
 from core.inpainting import Inpainter
