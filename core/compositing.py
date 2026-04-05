@@ -11,6 +11,8 @@ from core.inpainting import Inpainter
 from core.config import SUPPORTED_EXTENSIONS, InpaintAlgorithm
 
 
+# ==================== 辅助函数 ====================
+
 def get_image_files(directory: Path) -> list:
     image_extensions = SUPPORTED_EXTENSIONS
     files = []
@@ -22,6 +24,197 @@ def get_image_files(directory: Path) -> list:
         pass
     return natsorted(files, key=lambda x: x.name)
 
+
+def find_image_file(directory: Path, base_name: str) -> Path:
+    """在目录中查找与基本名称匹配的图片文件"""
+    for img_path in get_image_files(directory):
+        if img_path.stem == base_name:
+            return img_path
+    return directory / f"{base_name}.png"
+
+
+# ==================== 图片尺寸调整 ====================
+
+def resize_text_images_to_match_raw(raw_dir, text_dir, status_callback=None):
+    """
+    调整熟肉图片大小，使其高度与生肉图片相同
+
+    Args:
+        raw_dir: 生肉图片目录
+        text_dir: 熟肉图片目录
+        status_callback: 进度回调函数
+    """
+
+    raw_images = get_image_files(Path(raw_dir))
+
+    if not raw_images:
+        logger.error(f"错误: 生肉目录 {raw_dir} 中没有找到图片文件")
+        return 0
+
+    processed_count = 0
+    total_count = len(raw_images)
+
+    for idx, raw_img_path in enumerate(raw_images):
+        if status_callback:
+            status_callback(idx + 1, total_count)
+
+        img_stem = raw_img_path.stem
+
+        # 在熟肉目录中查找同名图片（扩展名不限）
+        text_img_path = None
+        for candidate in get_image_files(Path(text_dir)):
+            if candidate.stem == img_stem:
+                text_img_path = candidate
+                break
+
+        if text_img_path is None:
+            continue
+
+        try:
+            with Image.open(raw_img_path) as raw_img:
+                raw_height = raw_img.height
+
+            with Image.open(text_img_path) as text_img:
+                ratio = raw_height / text_img.height
+                new_width = int(text_img.width * ratio)
+                resized_img = text_img.resize((new_width, raw_height), resample=Image.LANCZOS)
+                resized_img.save(text_img_path)
+                processed_count += 1
+
+        except Exception as e:
+            logger.error(f"调整失败 {text_img_path.name}: {e}")
+
+    return processed_count
+
+
+def copy_input_images_to_temp(original_input_dir, temp_input_dir):
+    """
+    将原始输入图片复制到temp目录
+
+    Args:
+        original_input_dir: 原始输入目录
+        temp_input_dir: temp目录下的输入目录
+    """
+
+    os.makedirs(temp_input_dir, exist_ok=True)
+
+    # 遍历获取图片文件
+    image_files = get_image_files(Path(original_input_dir))
+
+    copied_count = 0
+    for img_path in image_files:
+        dest_path = Path(temp_input_dir) / img_path.name
+        shutil.copy2(img_path, dest_path)
+        copied_count += 1
+
+    return copied_count
+
+
+# ==================== 文字提取 ====================
+
+def extract_text_from_masks(input_dir, mask_dir, output_dir, dilation_iterations=2, status_callback=None):
+    """
+    从掩码图像中提取文字
+
+    Args:
+        input_dir: 原始图片目录
+        mask_dir: 掩码图片目录
+        output_dir: 提取结果输出目录
+        dilation_iterations: 膨胀迭代次数，用于扩大文字区域
+        status_callback: 进度回调函数，每处理一张图片调用一次，参数为(processed, total)
+    """
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    input_images = get_image_files(Path(input_dir))
+    total = len(input_images)
+    processed_count = 0
+
+    for idx, input_img_path in enumerate(input_images):
+        if status_callback:
+            status_callback(idx + 1, total)
+
+        img_name = input_img_path.stem
+        mask_filename = f"mask-{img_name}.png"
+        mask_path = Path(mask_dir) / mask_filename
+
+        if not mask_path.exists():
+            continue
+
+        output_filename = f"{img_name}.png"
+        output_path = Path(output_dir) / output_filename
+
+        try:
+            MaskProcessor(
+                input_path=str(input_img_path),
+                mask_path=str(mask_path),
+                output_path=str(output_path),
+                dilation_iterations=dilation_iterations
+            )
+            processed_count += 1
+
+        except Exception as e:
+            logger.error(f"提取失败 {input_img_path.name}: {e}")
+
+    return processed_count
+
+
+# ==================== 图像修复 ====================
+
+def inpaint_raw_images(raw_img_dir, new_mask_dir, output_dir, algorithm=InpaintAlgorithm.PATCHMATCH, status_callback=None):
+    """
+    修复生肉图片
+
+    Args:
+        raw_img_dir: 生肉图片目录
+        new_mask_dir: 新掩膜目录
+        output_dir: 修复结果输出目录
+        algorithm: 修复算法，默认使用patchmatch
+        status_callback: 进度回调函数
+    """
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    raw_images = get_image_files(Path(raw_img_dir))
+
+    if not raw_images:
+        logger.error(f"错误: 生肉目录 {raw_img_dir} 中没有找到图片文件")
+        return 0
+
+    processed_count = 0
+    total_count = len(raw_images)
+
+    for idx, raw_img_path in enumerate(raw_images):
+        if status_callback:
+            status_callback(idx + 1, total_count)
+
+        img_name = raw_img_path.stem
+        mask_filename = f"mask-{img_name}.png"
+        mask_path = Path(new_mask_dir) / mask_filename
+
+        if not mask_path.exists():
+            continue
+
+        output_filename = f"{img_name}.png"
+        output_path = Path(output_dir) / output_filename
+
+        try:
+            Inpainter(
+                img_path=str(raw_img_path),
+                mask_path=str(mask_path),
+                output_path=str(output_path),
+                algorithm=algorithm,
+                debug=False
+            )
+            processed_count += 1
+
+        except Exception as e:
+            logger.error(f"修复失败 {raw_img_path.name}: {e}")
+
+    return processed_count
+
+
+# ==================== 文字移植 ====================
 
 def apply_text_to_inpainted(json_data: dict, status_callback=None):
     """将文本块贴到inpainted图片上"""
@@ -96,192 +289,9 @@ def apply_text_to_inpainted(json_data: dict, status_callback=None):
             status_callback()
 
 
-def find_image_file(directory: Path, base_name: str) -> Path:
-    """在目录中查找与基本名称匹配的图片文件"""
-    for img_path in get_image_files(directory):
-        if img_path.stem == base_name:
-            return img_path
-    return directory / f"{base_name}.png"
-
-
-def copy_input_images_to_temp(original_input_dir, temp_input_dir):
-    """
-    将原始输入图片复制到temp目录
-
-    Args:
-        original_input_dir: 原始输入目录
-        temp_input_dir: temp目录下的输入目录
-    """
-
-    os.makedirs(temp_input_dir, exist_ok=True)
-
-    # 遍历获取图片文件
-    image_files = get_image_files(Path(original_input_dir))
-
-    copied_count = 0
-    for img_path in image_files:
-        dest_path = Path(temp_input_dir) / img_path.name
-        shutil.copy2(img_path, dest_path)
-        copied_count += 1
-
-    return copied_count
-
-
-def resize_text_images_to_match_raw(raw_dir, text_dir, status_callback=None):
-    """
-    调整熟肉图片大小，使其高度与生肉图片相同
-
-    Args:
-        raw_dir: 生肉图片目录
-        text_dir: 熟肉图片目录
-        status_callback: 进度回调函数
-    """
-
-    raw_images = get_image_files(Path(raw_dir))
-
-    if not raw_images:
-        logger.error(f"错误: 生肉目录 {raw_dir} 中没有找到图片文件")
-        return 0
-
-    processed_count = 0
-    total_count = len(raw_images)
-
-    for idx, raw_img_path in enumerate(raw_images):
-        if status_callback:
-            status_callback(idx + 1, total_count)
-
-        img_stem = raw_img_path.stem
-
-        # 在熟肉目录中查找同名图片（扩展名不限）
-        text_img_path = None
-        for candidate in get_image_files(Path(text_dir)):
-            if candidate.stem == img_stem:
-                text_img_path = candidate
-                break
-
-        if text_img_path is None:
-            continue
-
-        try:
-            with Image.open(raw_img_path) as raw_img:
-                raw_height = raw_img.height
-
-            with Image.open(text_img_path) as text_img:
-                ratio = raw_height / text_img.height
-                new_width = int(text_img.width * ratio)
-                resized_img = text_img.resize((new_width, raw_height), resample=Image.LANCZOS)
-                resized_img.save(text_img_path)
-                processed_count += 1
-
-        except Exception as e:
-            logger.error(f"调整失败 {text_img_path.name}: {e}")
-
-    return processed_count
-
-
-def extract_text_from_masks(input_dir, mask_dir, output_dir, dilation_iterations=2, status_callback=None):
-    """
-    从掩码图像中提取文字
-
-    Args:
-        input_dir: 原始图片目录
-        mask_dir: 掩码图片目录
-        output_dir: 提取结果输出目录
-        dilation_iterations: 膨胀迭代次数，用于扩大文字区域
-        status_callback: 进度回调函数，每处理一张图片调用一次，参数为(processed, total)
-    """
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    input_images = get_image_files(Path(input_dir))
-    total = len(input_images)
-    processed_count = 0
-
-    for idx, input_img_path in enumerate(input_images):
-        if status_callback:
-            status_callback(idx + 1, total)
-
-        img_name = input_img_path.stem
-        mask_filename = f"mask-{img_name}.png"
-        mask_path = Path(mask_dir) / mask_filename
-
-        if not mask_path.exists():
-            continue
-
-        output_filename = f"{img_name}.png"
-        output_path = Path(output_dir) / output_filename
-
-        try:
-            MaskProcessor(
-                input_path=str(input_img_path),
-                mask_path=str(mask_path),
-                output_path=str(output_path),
-                dilation_iterations=dilation_iterations
-            )
-            processed_count += 1
-
-        except Exception as e:
-            logger.error(f"提取失败 {input_img_path.name}: {e}")
-
-    return processed_count
-
-
-def inpaint_raw_images(raw_img_dir, new_mask_dir, output_dir, algorithm=InpaintAlgorithm.PATCHMATCH, status_callback=None):
-    """
-    修复生肉图片
-
-    Args:
-        raw_img_dir: 生肉图片目录
-        new_mask_dir: 新掩膜目录
-        output_dir: 修复结果输出目录
-        algorithm: 修复算法，默认使用patchmatch
-        status_callback: 进度回调函数
-    """
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    raw_images = get_image_files(Path(raw_img_dir))
-
-    if not raw_images:
-        logger.error(f"错误: 生肉目录 {raw_img_dir} 中没有找到图片文件")
-        return 0
-
-    processed_count = 0
-    total_count = len(raw_images)
-
-    for idx, raw_img_path in enumerate(raw_images):
-        if status_callback:
-            status_callback(idx + 1, total_count)
-
-        img_name = raw_img_path.stem
-        mask_filename = f"mask-{img_name}.png"
-        mask_path = Path(new_mask_dir) / mask_filename
-
-        if not mask_path.exists():
-            continue
-
-        output_filename = f"{img_name}.png"
-        output_path = Path(output_dir) / output_filename
-
-        try:
-            Inpainter(
-                img_path=str(raw_img_path),
-                mask_path=str(mask_path),
-                output_path=str(output_path),
-                algorithm=algorithm,
-                debug=False
-            )
-            processed_count += 1
-
-        except Exception as e:
-            logger.error(f"修复失败 {raw_img_path.name}: {e}")
-
-    return processed_count
-
-
 def apply_text_to_inpainted_step(json_path, status_callback=None):
     """
-    第七步：将文字贴到修复后的图片上
+    将文字贴到去字后的图片上
 
     Args:
         json_path: 匹配结果JSON文件路径

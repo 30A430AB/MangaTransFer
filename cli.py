@@ -1,16 +1,26 @@
 import argparse
 from pathlib import Path
 import sys
-import time
 from natsort import natsorted
 from loguru import logger
 from tqdm import tqdm
 import torch
+import json
+
+from core.config import ResourceManager
+def ensure_resources_before_import():
+    try:
+        ResourceManager.ensure_all()
+    except Exception as e:
+        print(f"资源准备失败: {e}")
+        sys.exit(1)
+
+ensure_resources_before_import()
 
 from core.detection import ComicTextDetector
-from core.adjustment import CoordinateAdjuster
+from core.box_refiner import CoordinateAdjuster
 from core.matching import match_and_create_masks, match_images
-from core.image_utils import (
+from core.compositing import (
     resize_text_images_to_match_raw,
     extract_text_from_masks,
     inpaint_raw_images,
@@ -20,7 +30,7 @@ from core.config import (
     SUPPORTED_EXTENSIONS,
     DirPaths,
     DataPaths,
-    InpaintAlgorithm
+    InpaintAlgorithm,
 )
 
 
@@ -76,12 +86,12 @@ def configure_logging():
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
 
 class MangaTransFerPipeline:
-    """漫画翻译移植流水线"""
+    """漫画翻译移植流程"""
     
     def __init__(self, raw_dir, text_dir, model_path, inpaint_algorithm=InpaintAlgorithm.PATCHMATCH, 
                 output_dir=None, automatch=True, generate_thumbnails=False, precomputed_matches=None):
         """
-        初始化流水线
+        初始化
         
         Args:
             raw_dir: 生肉图片目录
@@ -134,8 +144,8 @@ class MangaTransFerPipeline:
             
         return dirs
     
-    def step1_resize_images(self, directories):
-        """步骤1: 复制熟肉图片到工作目录，并根据图片匹配结果重命名"""
+    def resize_images(self, directories):
+        """复制熟肉图片到工作目录，并根据图片匹配结果重命名"""
 
         src_dir = self.text_dir
         dst_dir = directories['temp']
@@ -204,7 +214,7 @@ class MangaTransFerPipeline:
         # ----- 调整尺寸阶段 -----
         raw_images = self._get_sorted_images(self.raw_dir)
         total_raw = len(raw_images)
-        pbar = tqdm(total=total_raw, desc="预处理", unit="张",
+        pbar = tqdm(total=total_raw, desc="尺寸调整", unit="张",
                     bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}')
 
         def resize_callback(idx, total):
@@ -219,8 +229,8 @@ class MangaTransFerPipeline:
         pbar.close()
         return True
     
-    def step2_detect_text(self, directories):
-        """步骤2: 文字检测（合并进度条）"""
+    def detect_text(self, directories):
+        """文本检测"""
 
         # 获取图片数量
         raw_images = self._get_sorted_images(self.raw_dir)
@@ -228,13 +238,13 @@ class MangaTransFerPipeline:
         total_images = len(raw_images) + len(text_images)
 
         # 创建统一的进度条
-        pbar = tqdm(total=total_images, desc="文字检测", unit="张",
+        pbar = tqdm(total=total_images, desc="文本检测", unit="张",
                     bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}')
 
         def progress_callback(idx, total):
             pbar.update(1)
 
-        # 检测生肉文字
+        # 检测生肉文本
         raw_detector = ComicTextDetector(
             img_dir=str(self.raw_dir),
             save_dir=str(directories['raw_mask']),
@@ -246,7 +256,7 @@ class MangaTransFerPipeline:
         )
         raw_detector.detect()
 
-        # 检测熟肉文字
+        # 检测熟肉文本
         text_detector = ComicTextDetector(
             img_dir=str(self.text_dir),
             save_dir=str(directories['text_mask']),
@@ -261,8 +271,8 @@ class MangaTransFerPipeline:
         pbar.close()
         return True
     
-    def step3_match_boxes(self, directories):
-        """步骤3: 文本框匹配（带进度条）"""
+    def match_boxes(self, directories):
+        """文本框匹配"""
 
         text_annotations = directories['text_mask'] / "annotations.json"
         raw_annotations = directories['raw_mask'] / "annotations.json"
@@ -293,19 +303,16 @@ class MangaTransFerPipeline:
 
         return match_output
     
-    def step4_adjust_coordinates(self, directories):
-        """步骤4: 文本框坐标调整"""
+    def adjust_coordinates(self, directories):
+        """文本框坐标调整"""
 
-        annotations_path = directories['text_mask'] / "annotations.json"
-
-        if not annotations_path.exists():
-            raise Exception(f"标注文件不存在: {annotations_path}")
+        match_results_path = self.output_dir / "match_results.json"
+        text_dir = directories['text']
 
         # 读取 annotations.json 获取图片总数
-        import json
-        with open(annotations_path, 'r', encoding='utf-8') as f:
+        with open(match_results_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        total_images = len(data)
+        total_images = len(data.get('pages', {}))
 
         pbar = tqdm(total=total_images, desc="坐标调整", unit="张",
                     bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}')
@@ -313,10 +320,10 @@ class MangaTransFerPipeline:
         def progress_callback(processed, total):
             pbar.update(1)
 
-        adjuster = CoordinateAdjuster(
-            text_dir=str(directories['text_mask']),
-            annotations_path=str(annotations_path),
-            status_callback=progress_callback
+        adjuster = CoordinateAdjuster(       
+            match_results_path=str(match_results_path),
+            text_dir=str(text_dir),
+            status_callback=progress_callback,
         )
 
         adjuster.adjust_annotations()
@@ -324,13 +331,13 @@ class MangaTransFerPipeline:
         pbar.close()
         return True
     
-    def step5_extract_text(self, directories):
-        """步骤5: 文字提取"""
+    def extract_text(self, directories):
+        """文本提取"""
 
         input_images = self._get_sorted_images(self.text_dir)
         total = len(input_images)
 
-        pbar = tqdm(total=total, desc="文字提取", unit="张",
+        pbar = tqdm(total=total, desc="文本提取", unit="张",
                     bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}')
 
         def progress_callback(processed, total):
@@ -347,20 +354,18 @@ class MangaTransFerPipeline:
         pbar.close()
         return True
     
-    def step6_inpaint_raw(self, directories):
-        """步骤6: 图片修复"""
+    def inpaint_raw(self, directories):
+        """图片修复"""
 
         # 获取需要修复的图片数量（基于 raw_dir 中的图片）
         raw_images = self._get_sorted_images(self.raw_dir)
         total = len(raw_images)
 
-        pbar = tqdm(total=total, desc="图片修复", unit="张",
+        pbar = tqdm(total=total, desc="图像修复", unit="张",
                     bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}')
 
         def progress_callback(idx, total):
             pbar.update(1)
-
-        start_time = time.time()
 
         inpainted_count = inpaint_raw_images(
             raw_img_dir=str(self.raw_dir),
@@ -377,8 +382,8 @@ class MangaTransFerPipeline:
 
         return True
     
-    def step7_apply_text(self, match_output_path):
-        """步骤7: 文字移植"""
+    def apply_text(self, match_output_path):
+        """文本移植"""
 
         # 读取 JSON 获取页面总数
         import json
@@ -386,7 +391,7 @@ class MangaTransFerPipeline:
             data = json.load(f)
         total_pages = len(data.get("pages", {}))
 
-        pbar = tqdm(total=total_pages, desc="文字移植", unit="张",
+        pbar = tqdm(total=total_pages, desc="文本移植", unit="张",
                     bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}')
 
         def progress_callback():
@@ -400,12 +405,12 @@ class MangaTransFerPipeline:
         pbar.close()
 
         if not success:
-            raise Exception("文字移植失败")
+            raise Exception("文本移植失败")
 
         return True
     
     def run(self):
-        """运行完整处理流水线"""
+        """运行完整处理流程"""
         self.logger.info("开始漫画重嵌处理")
         self.logger.info(f"生肉目录: {self.raw_dir}")
         self.logger.info(f"熟肉目录: {self.text_dir}")
@@ -416,13 +421,14 @@ class MangaTransFerPipeline:
             directories = self.prepare_directories()
             
             # 执行处理步骤
-            self.step1_resize_images(directories)
-            self.step2_detect_text(directories)
-            match_output = self.step3_match_boxes(directories)
-            # self.step4_adjust_coordinates(directories)
-            self.step5_extract_text(directories)
-            self.step6_inpaint_raw(directories)
-            self.step7_apply_text(match_output)
+            self.resize_images(directories)
+            self.detect_text(directories)
+            match_output = self.match_boxes(directories)
+            
+            self.extract_text(directories)
+            self.adjust_coordinates(directories)
+            self.inpaint_raw(directories)
+            self.apply_text(match_output)
             
             self.logger.info("处理结束。")
             self.logger.info(f"最终结果保存在: {directories['result']}")
@@ -461,7 +467,7 @@ def main():
         return
     
     try:
-        # 创建并运行流水线（输出目录默认为生肉目录）
+        # 创建并运行流程（输出目录默认为生肉目录）
         pipeline = MangaTransFerPipeline(
             raw_dir=args.raw_dir,
             text_dir=args.text_dir,

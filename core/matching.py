@@ -14,7 +14,7 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 from sklearn.metrics.pairwise import cosine_similarity
 
-from core.image_utils import get_image_files, find_image_file
+from core.compositing import get_image_files, find_image_file
 from core.config import DirPaths
 
 
@@ -373,7 +373,7 @@ def match_and_create_masks(raw_annotations_path, text_annotations_path, output_p
 
     # 创建新mask
     create_new_masks(result, raw_mask_dir, new_mask_dir)
-
+    
     return True
 
 # ==================== 图片匹配模块 ====================
