@@ -557,41 +557,53 @@ with ui.element('div').classes('fixed top-0 left-0 w-full h-full').style('margin
                             zoom_in_btn = ui.button(icon='zoom_in', color='transparent') \
                                 .props('flat dense') \
                                 .on('click', lambda: ui.run_javascript('window.canvasControls.zoomIn()'))
+                            
                             zoom_out_btn = ui.button(icon='zoom_out', color='transparent') \
                                 .props('flat dense') \
                                 .on('click', lambda: ui.run_javascript('window.canvasControls.zoomOut()'))
+                            
                             reset_btn = ui.button(icon='crop_free', color='transparent') \
                                 .props('flat dense') \
                                 .on('click', lambda: ui.run_javascript('window.canvasControls.resetZoom()'))
-                            # split_btn = ui.button(icon='compare', color='transparent') \
-                            #     .props('flat dense') \
-                            #     .on('click', lambda: ui.run_javascript('window.canvasControls.toggleWorkingReference()'))
+                            
                             split_btn = ui.button(color='transparent') \
                                 .props('flat dense') \
-                                .on('click', lambda: ui.run_javascript('window.canvasControls.toggleWorkingReference()'))
-                            
+                                .on('click', lambda: ui.run_javascript('window.canvasControls.toggleWorkingReference()'))           
                             with split_btn:
                                 ui.image('static/icons/view_column_2.svg').style('width: 24px; height: 24px')
+
+                            # split_btn = ui.button(icon='view_column_2', color='transparent') \
+                            #     .props('flat dense') \
+                            #     .on('click', lambda: ui.run_javascript('window.canvasControls.toggleWorkingReference()'))
                             
-                            new_btn = ui.button(color='transparent') \
+                            # new_btn = ui.button(color='transparent') \
+                            #     .props('flat dense') \
+                            #     .on('click', show_new_project_dialog)
+                            # with new_btn:
+                            #     ui.image('static/icons/create_new_folder.svg').style('width: 24px; height: 24px')
+
+                            new_btn = ui.button(icon='o_create_new_folder', color='transparent') \
                                 .props('flat dense') \
                                 .on('click', show_new_project_dialog)
-                            with new_btn:
-                                ui.image('static/icons/create_new_folder.svg').style('width: 24px; height: 24px')
 
                             load_btn = ui.button(icon='folder_open', color='transparent') \
                                 .props('flat dense') \
                                 .on('click', lambda: ui.run_javascript('window.selectProjectFile()'))
                             
-                            save_btn = ui.button(color='transparent') \
+                            # save_btn = ui.button(color='transparent') \
+                            #     .props('flat dense') \
+                            #     .on('click', lambda: ui.run_javascript('window.saveProject()'))
+                            # with save_btn:
+                            #     ui.image('static/icons/save.svg').style('width: 24px; height: 24px')
+
+                            save_btn = ui.button(icon='o_save', color='transparent') \
                                 .props('flat dense') \
                                 .on('click', lambda: ui.run_javascript('window.saveProject()'))
-                            with save_btn:
-                                ui.image('static/icons/save.svg').style('width: 24px; height: 24px')
 
                             prev_btn = ui.button(icon='navigate_before', color='transparent') \
                                 .props('flat dense') \
                                 .on('click', lambda: ui.run_javascript('window.goToPrevPage()'))
+                                
                             next_btn = ui.button(icon='navigate_next', color='transparent') \
                                 .props('flat dense') \
                                 .on('click', lambda: ui.run_javascript('window.goToNextPage()'))

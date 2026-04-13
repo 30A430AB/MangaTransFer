@@ -10,5 +10,6 @@ scikit-learn==1.7.2
 scipy==1.15.3
 shapely==2.1.2
 simple_lama_inpainting==0.1.0
+tdqm==4.67.3
 torch==2.11.0
 torchvision==0.26.0
