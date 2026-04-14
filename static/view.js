@@ -1,8 +1,13 @@
-window.projectPages = null;
+// ==================== 状态管理 ====================
+window.projectPages = null;           // 当前工作数据（可修改）
+window.initialProjectPages = null;    // 初始只读数据（用于重置）
 window.projectDirectory = null;
 window.currentImg = null;
-window.originalProjectPages = null;
 
+// 缓存上一次高亮的缩略图元素，用于性能优化
+let lastHighlightedCard = null;
+
+// ==================== 工具函数 ====================
 function showToast(message, type = 'info') {
     const toast = document.createElement('div');
     toast.textContent = message;
@@ -15,10 +20,11 @@ function showToast(message, type = 'info') {
     toast.style.color = 'white';
     toast.style.borderRadius = '4px';
     toast.style.boxShadow = '0 2px 5px rgba(0,0,0,0.2)';
-    toast.style.zIndex = '9999';
+    toast.style.zIndex = '99999';
     toast.style.fontSize = '14px';
     toast.style.transition = 'opacity 0.3s ease';
     toast.style.opacity = '1';
+    toast.style.pointerEvents = 'none';
     document.body.appendChild(toast);
 
     setTimeout(() => {
@@ -29,6 +35,18 @@ function showToast(message, type = 'info') {
     }, 3000);
 }
 
+function dataURItoBlob(dataURI) {
+    const byteString = atob(dataURI.split(',')[1]);
+    const mimeString = dataURI.split(',')[0].split(':')[1].split(';')[0];
+    const ab = new ArrayBuffer(byteString.length);
+    const ia = new Uint8Array(ab);
+    for (let i = 0; i < byteString.length; i++) {
+        ia[i] = byteString.charCodeAt(i);
+    }
+    return new Blob([ab], { type: mimeString });
+}
+
+// ==================== 项目加载与保存 ====================
 window.selectProjectFile = function() {
     const input = document.createElement('input');
     input.type = 'file';
@@ -50,11 +68,11 @@ window.selectProjectFile = function() {
                     showToast('Error: ' + data.error, 'error');
                     return;
                 }
-                window.projectPages = data.pages;
+                // 初始化状态
                 window.projectDirectory = data.directory;
                 window.currentImg = data.current_img;
-                // 保存原始数据副本
-                window.originalProjectPages = JSON.parse(JSON.stringify(data.pages));
+                window.projectPages = JSON.parse(JSON.stringify(data.pages));
+                window.initialProjectPages = JSON.parse(JSON.stringify(data.pages)); // 深拷贝作为只读初始数据
 
                 if (data.imageUrl) {
                     window.canvasControls.loadLayers(data.imageUrl, data.inpaintedImageUrl, data.textBlocks);
@@ -91,6 +109,9 @@ function generateThumbnails(thumbnails, directory) {
     container.innerHTML = '';
     const innerDiv = document.createElement('div');
     innerDiv.className = 'thumbnail-container';
+
+    // 使用 DocumentFragment 批量添加，减少重排
+    const fragment = document.createDocumentFragment();
     thumbnails.forEach(item => {
         const key = item.key;
         const thumbUrl = item.thumb_url;
@@ -114,58 +135,58 @@ function generateThumbnails(thumbnails, directory) {
         numberDiv.textContent = key;
         card.appendChild(numberDiv);
         card.addEventListener('click', () => loadImage(key, directory));
-        innerDiv.appendChild(card);
+        fragment.appendChild(card);
     });
+    innerDiv.appendChild(fragment);
     container.appendChild(innerDiv);
 }
 
 function loadImage(key, directory) {
     // 保存参考图可见状态
-    const wasWorkingVisible = window.canvasControls && window.canvasControls.isWorkingReferenceVisible ? window.canvasControls.isWorkingReferenceVisible() : false;
-    if (window.canvasControls && window.canvasControls.removeWorkingReference) {
+    const wasWorkingVisible = window.canvasControls?.isWorkingReferenceVisible?.() || false;
+    if (window.canvasControls?.removeWorkingReference) {
         window.canvasControls.removeWorkingReference();
     }
 
-    // 从原始数据中获取该页的条目（确保位置信息是原始的）
-    const entries = window.originalProjectPages ? window.originalProjectPages[key] : (window.projectPages ? window.projectPages[key] : []);
+    // 从初始只读数据中获取该页的条目（真正的原始数据）
+    const initialEntries = window.initialProjectPages ? window.initialProjectPages[key] : [];
     
-    // 重置 window.projectPages 中该页的数据为原始数据，丢弃未保存的修改
+    // 重置当前工作数据为该页的初始数据（丢弃未保存的修改）
     if (window.projectPages && key) {
-        window.projectPages[key] = JSON.parse(JSON.stringify(entries));
+        window.projectPages[key] = JSON.parse(JSON.stringify(initialEntries));
     }
 
     fetch('/get_image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ directory: directory, key: key, entries: entries })
+        body: JSON.stringify({ directory: directory, key: key, entries: initialEntries })
     })
     .then(response => response.json())
     .then(data => {
-        if (data.originalImageUrl) {
-            window.currentImg = key;
-            return window.canvasControls.loadLayers(data.originalImageUrl, data.inpaintedImageUrl, data.textBlocks)
-                .then(() => {
-                    updateTextBlocks(data.textBlocks, key);
-                    highlightCurrentThumbnail(key);
-                    if (wasWorkingVisible) {
-                        return window.canvasControls.loadWorkingReference();
-                    }
-                })
-                .then(() => {
-                    // 自动保存当前页索引到项目文件（不阻塞UI）
-                    fetch('/update_current_page', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ directory: directory, current_img: key })
-                    }).catch(err => console.warn('自动保存当前页失败:', err));
-                });
-        } else {
-            showToast('加载图片失败：' + (data.error || '未知错误'), 'error');
+        if (!data.originalImageUrl) {
+            throw new Error(data.error || '未知错误');
         }
+        window.currentImg = key;
+        return window.canvasControls.loadLayers(data.originalImageUrl, data.inpaintedImageUrl, data.textBlocks)
+            .then(() => {
+                updateTextBlocks(data.textBlocks, key);
+                highlightCurrentThumbnail(key);
+                if (wasWorkingVisible) {
+                    return window.canvasControls.loadWorkingReference();
+                }
+            })
+            .then(() => {
+                // 自动保存当前页索引到项目文件（不阻塞UI）
+                fetch('/update_current_page', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ directory: directory, current_img: key })
+                }).catch(err => console.warn('自动保存当前页失败:', err));
+            });
     })
     .catch(err => {
         console.error('Error loading image:', err);
-        showToast('加载图片失败', 'error');
+        showToast('加载图片失败：' + err.message, 'error');
     });
 }
 
@@ -179,9 +200,9 @@ function updateTextBlocks(textBlocks, pageKey) {
     container.innerHTML = '';
 
     textBlocks.forEach((block, index) => {
-        // 从 window.projectPages 获取当前可能被修改的可见性
-        let currentVisible = block.visible; // 默认原始值
-        if (window.projectPages && window.projectPages[pageKey] && window.projectPages[pageKey][index]) {
+        // 从当前工作数据中获取可见性状态（优先）
+        let currentVisible = block.visible;
+        if (window.projectPages?.[pageKey]?.[index]) {
             const entry = window.projectPages[pageKey][index];
             currentVisible = (entry.matched === 1);
         }
@@ -209,14 +230,14 @@ function updateTextBlocks(textBlocks, pageKey) {
 
         eyeBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            const newVisible = !(block.visible); // 直接切换当前块的 visible 属性
+            const newVisible = !block.visible;
             block.visible = newVisible;
             eyeBtn.innerHTML = `<span class="material-icons">${newVisible ? 'visibility' : 'visibility_off'}</span>`;
-            if (window.canvasControls && window.canvasControls.setTextBlockVisibility) {
+            if (window.canvasControls?.setTextBlockVisibility) {
                 window.canvasControls.setTextBlockVisibility(index, newVisible);
             }
-            // 可选：同步到 window.projectPages，但保存时会覆盖
-            if (window.projectPages && window.projectPages[pageKey] && window.projectPages[pageKey][index]) {
+            // 立即同步到工作数据
+            if (window.projectPages?.[pageKey]?.[index]) {
                 window.projectPages[pageKey][index].matched = newVisible ? 1 : 0;
             }
         });
@@ -225,12 +246,12 @@ function updateTextBlocks(textBlocks, pageKey) {
         card.appendChild(footerDiv);
 
         card.addEventListener('mouseenter', () => {
-            if (window.canvasControls && window.canvasControls.highlightTextBlock) {
+            if (window.canvasControls?.highlightTextBlock) {
                 window.canvasControls.highlightTextBlock(index, true);
             }
         });
         card.addEventListener('mouseleave', () => {
-            if (window.canvasControls && window.canvasControls.highlightTextBlock) {
+            if (window.canvasControls?.highlightTextBlock) {
                 window.canvasControls.highlightTextBlock(index, false);
             }
         });
@@ -252,10 +273,10 @@ window.loadProjectFromData = function(data) {
             showToast('Error: ' + data.error, 'error');
             return;
         }
-        window.projectPages = data.pages;
         window.projectDirectory = data.directory;
         window.currentImg = data.current_img;
-        window.originalProjectPages = JSON.parse(JSON.stringify(data.pages));
+        window.projectPages = JSON.parse(JSON.stringify(data.pages));
+        window.initialProjectPages = JSON.parse(JSON.stringify(data.pages));
 
         if (data.imageUrl) {
             window.canvasControls.loadLayers(data.imageUrl, data.inpaintedImageUrl, data.textBlocks);
@@ -281,7 +302,7 @@ window.loadProjectFromData = function(data) {
 
 window.saveProject = function() {
     // 保存前将当前画布上的位置同步到 window.projectPages
-    if (window.canvasControls && window.canvasControls.updateCurrentPageData) {
+    if (window.canvasControls?.updateCurrentPageData) {
         window.canvasControls.updateCurrentPageData();
     }
 
@@ -313,8 +334,8 @@ window.saveProject = function() {
         return saveImages(directory, key, entries);
     })
     .then(() => {
-        // 保存成功后，将当前 projectPages 更新为原始数据
-        window.originalProjectPages = JSON.parse(JSON.stringify(window.projectPages));
+        // 保存成功后，将当前工作数据同步到初始只读数据
+        window.initialProjectPages = JSON.parse(JSON.stringify(window.projectPages));
         showToast('保存成功', 'success');
     })
     .catch(err => {
@@ -324,21 +345,29 @@ window.saveProject = function() {
 };
 
 async function saveImages(directory, key, entries) {
+    // 通过 canvasControls 获取当前画布图片数据，避免直接访问全局变量
     let imageToSave = null;
-    if (inpaintedImage) {
-        imageToSave = inpaintedImage;
-    } else if (comicImage) {
-        imageToSave = comicImage;
+    let imgWidth = 0, imgHeight = 0;
+    if (window.canvasControls?.getInpaintedImage) {
+        const info = window.canvasControls.getInpaintedImage();
+        imageToSave = info.image;
+        imgWidth = info.width;
+        imgHeight = info.height;
     }
+    if (!imageToSave && window.canvasControls?.getComicImage) {
+        const info = window.canvasControls.getComicImage();
+        imageToSave = info.image;
+        imgWidth = info.width;
+        imgHeight = info.height;
+    }
+
     if (imageToSave) {
-        // 创建离屏 canvas，以不透明度 1 绘制图片，忽略滑块透明度
         const offCanvas = document.createElement('canvas');
-        offCanvas.width = imageWidth;
-        offCanvas.height = imageHeight;
+        offCanvas.width = imgWidth;
+        offCanvas.height = imgHeight;
         const offCtx = offCanvas.getContext('2d');
-        // 获取原生图像元素（原始图片数据）
         const imgElement = imageToSave.getElement();
-        offCtx.drawImage(imgElement, 0, 0, imageWidth, imageHeight);
+        offCtx.drawImage(imgElement, 0, 0, imgWidth, imgHeight);
         const imageDataURL = offCanvas.toDataURL('image/png');
         const imageBlob = dataURItoBlob(imageDataURL);
         const formData = new FormData();
@@ -371,27 +400,30 @@ async function saveImages(directory, key, entries) {
     }
 }
 
-// 高亮当前页缩略图并滚动到中间
+// 高亮当前页缩略图并滚动到中间（性能优化版）
 function highlightCurrentThumbnail(currentKey) {
     const scrollContainer = document.querySelector('[name="thumbnail-list"]');
     if (!scrollContainer) return;
     const innerContainer = scrollContainer.querySelector('.thumbnail-container');
     if (!innerContainer) return;
     const cards = innerContainer.querySelectorAll('.thumbnail-card');
+    
+    // 清除上一个高亮
+    if (lastHighlightedCard) {
+        lastHighlightedCard.style.boxShadow = '';
+    }
+    
     let currentCard = null;
-    cards.forEach(card => {
-        const key = card.getAttribute('data-key');
-        if (key === currentKey) {
+    for (const card of cards) {
+        if (card.getAttribute('data-key') === currentKey) {
             card.style.boxShadow = '0 0 5px rgba(33, 150, 243, 0.5)';
             currentCard = card;
-        } else {
-            card.style.border = '';
-            card.style.boxShadow = '';
+            break;
         }
-    });
+    }
+    lastHighlightedCard = currentCard;
 
     if (currentCard) {
-        // 计算并设置滚动位置，使当前卡片在可视区域垂直居中
         const containerRect = scrollContainer.getBoundingClientRect();
         const cardRect = currentCard.getBoundingClientRect();
         const relativeTop = cardRect.top - containerRect.top;
@@ -430,169 +462,29 @@ window.goToNextPage = function() {
     loadImage(nextKey, window.projectDirectory);
 };
 
-// ==================== 匹配结果面板交互 ====================
+// ==================== 匹配结果面板交互（使用事件委托） ====================
 window.initMatchResultPanel = function(textDir, thumbDir) {
     window.textDir = textDir;
     window.thumbDir = thumbDir;
 
-    var currentRow = null;
-    var modal = null;
+    // 使用事件委托处理删除按钮和缩略图点击
+    const container = document.querySelector('.q-dialog-plugin'); // 匹配结果对话框容器
+    if (!container) return;
 
-    function createModal() {
-        if (modal) return modal;
-        modal = document.createElement('div');
-        modal.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); display:none; justify-content:center; align-items:center; z-index:10000;';
-        modal.innerHTML = '<div style="background:white; border-radius:12px; width:80%; max-width:800px; max-height:80%; display:flex; flex-direction:column; overflow:hidden;">' +
-            '<h3 style="text-align:center; margin:16px 0 8px 0; font-size:16px;">选择文本图片</h3>' +
-            '<div id="thumb-grid" class="modern-scrollbar" style="flex:1; overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(120px,1fr)); gap:12px; padding:0 20px 20px 20px;"></div>' +
-            '<div style="display:flex; justify-content:center; gap:20px; padding:16px 20px; border-top:1px solid #eee;">' +
-            '<button id="cancel-btn" style="padding:8px 24px; background:#f0f0f0; border:none; border-radius:4px; cursor:pointer;">取消</button>' +
-            '<button id="confirm-btn" style="padding:8px 24px; background:#007bff; color:white; border:none; border-radius:4px; cursor:pointer;">确定</button>' +
-            '</div></div>';
-        document.body.appendChild(modal);
-        modal.querySelector('#cancel-btn').onclick = function() {
-            modal.style.display = 'none';
-            currentRow = null;
-        };
-        modal.querySelector('#confirm-btn').onclick = async function() {
-            try {
-                var selectedDiv = modal.querySelector('.thumb-selected');
-                if (!selectedDiv) {
-                    alert('请选择一个文本图片');
-                    return;
-                }
-                var originalFileName = selectedDiv.getAttribute('data-original-filename');
-                var fullTextPath = selectedDiv.getAttribute('data-full-path');
-                var finalImageUrl = selectedDiv.getAttribute('data-image-url');
-                if (!originalFileName || !fullTextPath || !finalImageUrl) {
-                    alert('数据错误');
-                    return;
-                }
-                if (currentRow) {
-                    var wrapper = currentRow.querySelector('.thumb-wrapper');
-                    var imgEl = wrapper.querySelector('img');
-                    var nameLabel = currentRow.querySelector('.text-col .text-xs');
-                    if (nameLabel) nameLabel.innerText = originalFileName;
-                    if (imgEl) {
-                        imgEl.src = finalImageUrl;
-                        imgEl.style.backgroundImage = 'none';
-                        imgEl.style.objectFit = '';
-                        imgEl.style.height = '150px';
-                        imgEl.style.width = 'auto';
-                    }
-                    wrapper.dataset.deleted = 'false';
-                    imgEl.onclick = null;
-                    
-                    var rawPath = currentRow.getAttribute('data-raw-path');
-                    fetch('/update_match_text', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ raw_path: rawPath, new_text_path: fullTextPath })
-                    }).then(function(res) { return res.json(); }).then(function(data) {
-                        if (!data.success) console.error('更新匹配失败', data);
-                    }).catch(function(err) { console.error('更新匹配出错', err); });
-                }
-                modal.style.display = 'none';
-                currentRow = null;
-            } catch (err) {
-                console.error('确认时出错:', err);
-                alert('操作失败，请重试');
-            }
-        };
-        return modal;
+    // 移除之前绑定的监听器（避免重复）
+    if (container._matchPanelHandler) {
+        container.removeEventListener('click', container._matchPanelHandler);
     }
 
-    function getBestImageUrl(baseName, originalFileName) {
-        return new Promise(function(resolve) {
-            var thumbUrl = '/thumbs/thumb_text_' + baseName + '.jpg';
-            var originalUrl = '/text_original/' + encodeURIComponent(originalFileName);
-            var testImg = new Image();
-            testImg.onload = function() { resolve(thumbUrl); };
-            testImg.onerror = function() { resolve(originalUrl); };
-            testImg.src = thumbUrl;
-        });
-    }
-
-    async function showImageSelector(row) {
-        try {
-            currentRow = row;
-            var modal = createModal();
-            var grid = modal.querySelector('#thumb-grid');
-            grid.innerHTML = '<div style="text-align:center;">加载中...</div>';
-            modal.style.display = 'flex';
-            try {
-                var response = await fetch('/get_text_images', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text_dir: window.textDir })
-                });
-                var data = await response.json();
-                if (data.error) throw new Error(data.error);
-                var files = data.files;
-                if (files.length === 0) {
-                    grid.innerHTML = '<div style="text-align:center;">没有可用的文本图片</div>';
-                    return;
-                }
-                grid.innerHTML = '';
-                var promises = files.map(function(file) {
-                    var baseName = file.replace(/\.[^/.]+$/, '');
-                    return getBestImageUrl(baseName, file).then(function(url) {
-                        return { file: file, url: url };
-                    });
-                });
-                var results = await Promise.all(promises);
-                for (var i = 0; i < results.length; i++) {
-                    var file = results[i].file;
-                    var bestUrl = results[i].url;
-                    var div = document.createElement('div');
-                    div.style.cssText = 'cursor:pointer; text-align:center; padding:4px; border:1px solid #ddd; border-radius:4px;';
-                    div.innerHTML = `<img src="${bestUrl}" style="width:100%; height:auto; max-height:100px; object-fit:contain;" onerror="this.src='${bestUrl}'" />`;
-                    (function(f, currentDiv, imgUrl) {
-                        currentDiv.onclick = function() {
-                            grid.querySelectorAll('.thumb-selected').forEach(function(el) { el.classList.remove('thumb-selected'); });
-                            currentDiv.classList.add('thumb-selected');
-                            currentDiv.style.borderColor = '#007bff';
-                            currentDiv.setAttribute('data-original-filename', f);
-                            currentDiv.setAttribute('data-full-path', window.textDir + '/' + f);
-                            currentDiv.setAttribute('data-image-url', imgUrl);
-                        };
-                    })(file, div, bestUrl);
-                    grid.appendChild(div);
-                }
-                if (!document.querySelector('#thumb-selected-style')) {
-                    var style = document.createElement('style');
-                    style.id = 'thumb-selected-style';
-                    style.textContent = '.thumb-selected { border-color: #007bff !important; background-color: #e7f3ff; }';
-                    document.head.appendChild(style);
-                }
-            } catch (err) {
-                console.error(err);
-                grid.innerHTML = '<div style="text-align:center;">加载失败</div>';
-            }
-        } catch (err) {
-            console.error('加载图片列表失败:', err);
-            var grid = modal.querySelector('#thumb-grid');
-            if (grid) grid.innerHTML = '<div style="text-align:center;">加载失败</div>';
-        }
-    }
-
-    // 为所有 .thumb-wrapper 绑定事件
-    document.querySelectorAll('.thumb-wrapper').forEach(function(wrapper) {
-        var img = wrapper.querySelector('img');
-        var delBtn = wrapper.querySelector('.del-btn');
-        wrapper.dataset.deleted = 'false';
-        
-        wrapper.addEventListener('mouseenter', function() {
-            if (wrapper.dataset.deleted === 'false') {
-                delBtn.style.display = 'flex';
-            }
-        });
-        wrapper.addEventListener('mouseleave', function() {
-            delBtn.style.display = 'none';
-        });
-        delBtn.addEventListener('click', function(e) {
+    const clickHandler = async function(e) {
+        // 处理删除按钮
+        const delBtn = e.target.closest('.del-btn');
+        if (delBtn) {
             e.stopPropagation();
-            if (wrapper.dataset.deleted === 'true') return;
+            const wrapper = delBtn.closest('.thumb-wrapper');
+            if (!wrapper || wrapper.dataset.deleted === 'true') return;
+            
+            const img = wrapper.querySelector('img');
             wrapper.dataset.deleted = 'true';
             img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
             img.style.height = '150px';
@@ -603,32 +495,201 @@ window.initMatchResultPanel = function(textDir, thumbDir) {
             img.style.backgroundPosition = 'center';
             img.style.backgroundSize = '24px 24px';
             delBtn.style.display = 'none';
-            var nameLabel = wrapper.closest('.row') ? wrapper.closest('.row').querySelector('.text-col .text-xs') : null;
+            
+            const nameLabel = wrapper.closest('.row')?.querySelector('.text-col .text-xs');
             if (nameLabel) nameLabel.innerText = '';
-            img.onclick = function() {
+            
+            // 绑定点击重新选择事件
+            img.onclick = () => {
                 if (wrapper.dataset.deleted === 'true') {
-                    var row = wrapper.closest('.row') || wrapper.closest('.flex-nowrap');
+                    const row = wrapper.closest('[data-raw-path]');
                     showImageSelector(row);
                 }
             };
-            var row = wrapper.closest('[data-raw-path]');
+            
+            const row = wrapper.closest('[data-raw-path]');
             if (row) {
-                var rawPath = row.getAttribute('data-raw-path');
+                const rawPath = row.getAttribute('data-raw-path');
                 fetch('/update_match_text', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ raw_path: rawPath, new_text_path: '' })
-                }).then(function(res) { return res.json(); }).then(function(data) {
+                    body: JSON.stringify({ raw_path: rawPath, new_text_path: '', text_dir: window.textDir })
+                }).then(res => res.json()).then(data => {
                     if (!data.success) console.error('清空 text_path 失败', data);
-                }).catch(function(err) { console.error('清空 text_path 出错', err); });
+                }).catch(err => console.error('清空 text_path 出错', err));
             }
-        });
+            return;
+        }
+
+        // 处理缩略图包装器的鼠标悬停（显示删除按钮）
+        const wrapper = e.target.closest('.thumb-wrapper');
+        if (wrapper) {
+            const delBtn = wrapper.querySelector('.del-btn');
+            if (e.type === 'mouseenter' && wrapper.dataset.deleted === 'false') {
+                delBtn.style.display = 'flex';
+            } else if (e.type === 'mouseleave') {
+                delBtn.style.display = 'none';
+            }
+        }
+    };
+
+    container.addEventListener('click', clickHandler);
+    container.addEventListener('mouseenter', clickHandler, true); // 捕获阶段处理
+    container.addEventListener('mouseleave', clickHandler, true);
+    container._matchPanelHandler = clickHandler;
+
+    // 初始化现有缩略图的删除按钮隐藏状态
+    document.querySelectorAll('.thumb-wrapper').forEach(wrapper => {
+        const delBtn = wrapper.querySelector('.del-btn');
+        if (delBtn) delBtn.style.display = 'none';
+        wrapper.dataset.deleted = 'false';
     });
 };
 
+// 图片选择器模态框（独立函数，避免闭包问题）
+let currentRow = null;
+let modal = null;
+
+function createModal() {
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); display:none; justify-content:center; align-items:center; z-index:10000;';
+    modal.innerHTML = `
+        <div style="background:white; border-radius:12px; width:80%; max-width:800px; max-height:80%; display:flex; flex-direction:column; overflow:hidden;">
+            <h3 style="text-align:center; margin:16px 0 8px 0; font-size:16px;">选择文本图片</h3>
+            <div id="thumb-grid" class="modern-scrollbar" style="flex:1; overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(120px,1fr)); gap:12px; padding:0 20px 20px 20px;"></div>
+            <div style="display:flex; justify-content:center; gap:20px; padding:16px 20px; border-top:1px solid #eee;">
+                <button id="cancel-btn" style="padding:8px 24px; background:#f0f0f0; border:none; border-radius:4px; cursor:pointer;">取消</button>
+                <button id="confirm-btn" style="padding:8px 24px; background:#007bff; color:white; border:none; border-radius:4px; cursor:pointer;">确定</button>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+    
+    modal.querySelector('#cancel-btn').onclick = () => {
+        modal.style.display = 'none';
+        currentRow = null;
+    };
+    modal.querySelector('#confirm-btn').onclick = async () => {
+        try {
+            const selectedDiv = modal.querySelector('.thumb-selected');
+            if (!selectedDiv) {
+                alert('请选择一个文本图片');
+                return;
+            }
+            const originalFileName = selectedDiv.getAttribute('data-original-filename');
+            const fullTextPath = selectedDiv.getAttribute('data-full-path');
+            const finalImageUrl = selectedDiv.getAttribute('data-image-url');
+            if (!originalFileName || !fullTextPath || !finalImageUrl) {
+                alert('数据错误');
+                return;
+            }
+            if (currentRow) {
+                const wrapper = currentRow.querySelector('.thumb-wrapper');
+                const imgEl = wrapper.querySelector('img');
+                const nameLabel = currentRow.querySelector('.text-col .text-xs');
+                if (nameLabel) nameLabel.innerText = originalFileName;
+                if (imgEl) {
+                    imgEl.src = finalImageUrl;
+                    imgEl.style.backgroundImage = 'none';
+                    imgEl.style.objectFit = '';
+                    imgEl.style.height = '150px';
+                    imgEl.style.width = 'auto';
+                }
+                wrapper.dataset.deleted = 'false';
+                imgEl.onclick = null;
+                
+                const rawPath = currentRow.getAttribute('data-raw-path');
+                fetch('/update_match_text', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ raw_path: rawPath, new_text_path: fullTextPath, text_dir: window.textDir })
+                }).then(res => res.json()).then(data => {
+                    if (!data.success) console.error('更新匹配失败', data);
+                }).catch(err => console.error('更新匹配出错', err));
+            }
+            modal.style.display = 'none';
+            currentRow = null;
+        } catch (err) {
+            console.error('确认时出错:', err);
+            alert('操作失败，请重试');
+        }
+    };
+    return modal;
+}
+
+function getBestImageUrl(baseName, originalFileName) {
+    return new Promise(resolve => {
+        const thumbUrl = '/thumbs/thumb_text_' + baseName + '.jpg';
+        const originalUrl = '/text_original/' + encodeURIComponent(originalFileName);
+        const testImg = new Image();
+        testImg.onload = () => resolve(thumbUrl);
+        testImg.onerror = () => resolve(originalUrl);
+        testImg.src = thumbUrl;
+    });
+}
+
+async function showImageSelector(row) {
+    try {
+        currentRow = row;
+        const modal = createModal();
+        const grid = modal.querySelector('#thumb-grid');
+        grid.innerHTML = '<div style="text-align:center;">加载中...</div>';
+        modal.style.display = 'flex';
+        
+        const response = await fetch('/get_text_images', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text_dir: window.textDir })
+        });
+        const data = await response.json();
+        if (data.error) throw new Error(data.error);
+        const files = data.files;
+        if (files.length === 0) {
+            grid.innerHTML = '<div style="text-align:center;">没有可用的文本图片</div>';
+            return;
+        }
+        grid.innerHTML = '';
+        
+        const promises = files.map(file => {
+            const baseName = file.replace(/\.[^/.]+$/, '');
+            return getBestImageUrl(baseName, file).then(url => ({ file, url }));
+        });
+        const results = await Promise.all(promises);
+        
+        for (const { file, url } of results) {
+            const div = document.createElement('div');
+            div.style.cssText = 'cursor:pointer; text-align:center; padding:4px; border:1px solid #ddd; border-radius:4px;';
+            div.innerHTML = `<img src="${url}" style="width:100%; height:auto; max-height:100px; object-fit:contain;" onerror="this.src='${url}'" />`;
+            div.onclick = () => {
+                grid.querySelectorAll('.thumb-selected').forEach(el => {
+                    el.classList.remove('thumb-selected');
+                    el.style.borderColor = '';
+                });
+                div.classList.add('thumb-selected');
+                div.style.borderColor = '#007bff';
+                div.setAttribute('data-original-filename', file);
+                div.setAttribute('data-full-path', window.textDir + '/' + file);
+                div.setAttribute('data-image-url', url);
+            };
+            grid.appendChild(div);
+        }
+        
+        if (!document.querySelector('#thumb-selected-style')) {
+            const style = document.createElement('style');
+            style.id = 'thumb-selected-style';
+            style.textContent = '.thumb-selected { border-color: #007bff !important; background-color: #e7f3ff; }';
+            document.head.appendChild(style);
+        }
+    } catch (err) {
+        console.error('加载图片列表失败:', err);
+        const grid = modal.querySelector('#thumb-grid');
+        if (grid) grid.innerHTML = '<div style="text-align:center;">加载失败</div>';
+    }
+}
+
 // 更新算法标签
 window.updateAlgorithmLabel = function(algorithm) {
-    let el = document.getElementById('algorithm-selector');
+    const el = document.getElementById('algorithm-selector');
     if (el) el.innerText = algorithm;
     window.currentAlgorithm = algorithm;
 };

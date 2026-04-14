@@ -255,6 +255,7 @@ class MangaTransFerPipeline:
                 output_path=str(match_output),
                 raw_mask_dir=str(directories['raw_mask']),
                 new_mask_dir=str(directories['new_mask']),
+                text_image_dir=str(self.text_dir),
                 status_callback=progress_callback
             )
 
@@ -349,6 +350,7 @@ class MangaTransFerPipeline:
                   bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
             success = apply_text_to_inpainted_step(
                 json_path=str(match_output_path),
+                raw_dir=str(self.raw_dir),
                 status_callback=progress_callback
             )
 
@@ -359,7 +361,7 @@ class MangaTransFerPipeline:
 
     def run(self):
         """运行完整处理流程"""
-        self.logger.info("开始漫画重嵌处理")
+        self.logger.info("开始漫画文本移植")
         self.logger.info(f"生肉目录: {self.raw_dir}")
         self.logger.info(f"熟肉目录: {self.text_dir}")
         self.logger.info(f"输出目录: {self.output_dir}")

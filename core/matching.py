@@ -1,21 +1,24 @@
 import json
-import numpy as np
-from scipy.spatial import cKDTree
-from scipy.optimize import linear_sum_assignment
-from PIL import Image
-import os
 from pathlib import Path
-from natsort import natsorted
-from loguru import logger
+from typing import List, Dict, Any, Optional, Tuple, Union
+
+import numpy as np
 import cv2
 import torch
 import torch.nn as nn
 import torchvision.models as models
 import torchvision.transforms as transforms
+from PIL import Image
+from natsort import natsorted
+from loguru import logger
+from scipy.spatial import cKDTree
+from scipy.optimize import linear_sum_assignment
 from sklearn.metrics.pairwise import cosine_similarity
 
 from core.compositing import get_image_files, find_image_file
 from core.config import DirPaths
+
+MASK_PREFIX = "mask-"
 
 
 # ==================== 文本框匹配模块 ====================
@@ -25,7 +28,7 @@ class TextBoxMatcher:
         self.cn_json = cn_json
         self._box_cache = {}
 
-    def load_boxes(self, json_path: str, image_name: str) -> list:
+    def load_boxes(self, json_path: str, image_name: str) -> List[Tuple[int, int, int, int]]:
         cache_key = f"{json_path}-{image_name}"
         if cache_key in self._box_cache:
             return self._box_cache[cache_key]
@@ -35,12 +38,15 @@ class TextBoxMatcher:
 
         image_entry = data.get(image_name, {})
         annotations = image_entry.get("annotations", [])
-        result = [ann['xyxy'] for ann in annotations if isinstance(ann, dict) and 'xyxy' in ann]
+        result = [tuple(ann['xyxy']) for ann in annotations if isinstance(ann, dict) and 'xyxy' in ann]
 
         self._box_cache[cache_key] = result
         return result
 
-    def convert_coordinates(self, box: tuple, src_size: tuple, dst_size: tuple) -> tuple:
+    @staticmethod
+    def convert_coordinates(box: Tuple[int, int, int, int],
+                            src_size: Tuple[int, int],
+                            dst_size: Tuple[int, int]) -> Tuple[int, int, int, int]:
         src_w, src_h = src_size
         dst_w, dst_h = dst_size
         return (
@@ -50,49 +56,36 @@ class TextBoxMatcher:
             int(box[3] * (dst_h / src_h))
         )
 
-    def match_boxes(self, jp_key: str, cn_key: str, jp_size: tuple, cn_size: tuple) -> dict:
+    def match_boxes(self, jp_key: str, cn_key: str,
+                    jp_size: Tuple[int, int], cn_size: Tuple[int, int]) -> Dict[str, Any]:
         jp_boxes = self.load_boxes(self.jp_json, jp_key)
-        cn_boxes = [self.convert_coordinates(b, cn_size, jp_size) for b in self.load_boxes(self.cn_json, cn_key)]
+        cn_boxes_raw = self.load_boxes(self.cn_json, cn_key)
+        cn_boxes = [self.convert_coordinates(b, cn_size, jp_size) for b in cn_boxes_raw]
 
-        # 坐标转换
-        cn_boxes_converted = [
-            (
-                int(box[0]),
-                int(box[1]),
-                int(box[2]),
-                int(box[3])
-            )
-            for box in cn_boxes
-        ]
+        if not jp_boxes or not cn_boxes:
+            return {'matches': [], 'adjusted_positions': []}
 
-        # 计算动态阈值
-        avg_height = np.mean([box[3]-box[1] for box in jp_boxes]) if jp_boxes else 0
-        self.y_threshold = avg_height * 0.5
+        # 计算动态 Y 阈值
+        avg_height = np.mean([b[3] - b[1] for b in jp_boxes])
+        y_threshold = avg_height * 0.5
 
-        # 中心点计算
+        # 中心点
         jp_centers = [((b[0] + b[2]) // 2, (b[1] + b[3]) // 2) for b in jp_boxes]
-        cn_centers = [((b[0] + b[2]) // 2, (b[1] + b[3]) // 2) for b in cn_boxes_converted]
+        cn_centers = [((b[0] + b[2]) // 2, (b[1] + b[3]) // 2) for b in cn_boxes]
 
-        # 匈牙利匹配（替换原KD树贪心匹配）
-        matches = self._hungarian_match(jp_boxes, cn_boxes_converted)
+        # 匈牙利匹配
+        matches = self._hungarian_match(jp_boxes, cn_boxes, y_threshold)
 
-        # 坐标转换逻辑（基于中心点对齐）
         adjusted_positions = []
-        for (jp_idx, cn_idx) in matches:
-            # 使用日漫中心点坐标
+        for jp_idx, cn_idx in matches:
             target_cx, target_cy = jp_centers[jp_idx]
-
-            # 获取汉化文本框原始尺寸
-            cn_box = cn_boxes[cn_idx]
-            w = int(cn_box[2] - cn_box[0])
-            h = int(cn_box[3] - cn_box[1])
-
-            # 以日漫中心点为基准计算新坐标
-            x1 = int(target_cx - w/2)
-            y1 = int(target_cy - h/2)
+            cn_box = cn_boxes_raw[cn_idx]  # 使用原始尺寸计算宽度高度
+            w = cn_box[2] - cn_box[0]
+            h = cn_box[3] - cn_box[1]
+            x1 = int(target_cx - w / 2)
+            y1 = int(target_cy - h / 2)
             x2 = int(x1 + w)
             y2 = int(y1 + h)
-
             adjusted_positions.append((x1, y1, x2, y2))
 
         return {
@@ -100,128 +93,104 @@ class TextBoxMatcher:
             'adjusted_positions': adjusted_positions
         }
 
-    def _hungarian_match(self, jp_boxes: list, cn_boxes: list) -> list:
-        """匈牙利算法匹配（全局最优匹配）"""
+    def _hungarian_match(self, jp_boxes: List[Tuple[int, int, int, int]],
+                         cn_boxes: List[Tuple[int, int, int, int]],
+                         y_threshold: float) -> List[Tuple[int, int]]:
         if not jp_boxes or not cn_boxes:
             return []
-
-        # 使用已有的 y_threshold
-        y_thresh = self.y_threshold
 
         n_jp = len(jp_boxes)
         n_cn = len(cn_boxes)
 
-        # 预先计算中心点
-        jp_centers = [((b[0]+b[2])/2, (b[1]+b[3])/2) for b in jp_boxes]
-        cn_centers = [((b[0]+b[2])/2, (b[1]+b[3])/2) for b in cn_boxes]
+        jp_centers = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for b in jp_boxes]
+        cn_centers = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for b in cn_boxes]
 
-        # 构建KD树用于快速Y轴候选查找
         jp_y = np.array([c[1] for c in jp_centers]).reshape(-1, 1)
         tree = cKDTree(jp_y)
 
         INF = 1e9
         cost_matrix = np.full((n_jp, n_cn), INF, dtype=np.float32)
 
-        # 为每个中文框找到Y轴阈值内的日文框候选
         for cn_idx, cn_center in enumerate(cn_centers):
             cy = cn_center[1]
-            candidates = tree.query_ball_point([[cy]], y_thresh)[0]
+            candidates = tree.query_ball_point([[cy]], y_threshold)[0]
             for jp_idx in candidates:
-                # 计算水平距离作为代价
-                jp_cx = jp_centers[jp_idx][0]
-                cn_cx = cn_center[0]
-                h_dist = abs(jp_cx - cn_cx)
+                h_dist = abs(jp_centers[jp_idx][0] - cn_center[0])
                 cost_matrix[jp_idx, cn_idx] = h_dist
 
-        # 使用匈牙利算法求解最小权匹配
         jp_indices, cn_indices = linear_sum_assignment(cost_matrix)
-
-        # 收集有效匹配（代价小于阈值）
-        matches = []
-        for jp_idx, cn_idx in zip(jp_indices, cn_indices):
-            if cost_matrix[jp_idx, cn_idx] < INF / 2:  # 有效匹配
-                matches.append((jp_idx, cn_idx))
-
+        matches = [(int(jp), int(cn)) for jp, cn in zip(jp_indices, cn_indices)
+                   if cost_matrix[jp, cn] < INF / 2]
         return matches
 
 
-def create_new_masks(match_result, raw_mask_dir, output_dir):
-    """
-    根据匹配结果创建新的日漫mask，并根据图片尺寸自适应膨胀
-    """
-
-    os.makedirs(output_dir, exist_ok=True)
+def create_new_masks(match_result: Dict[str, Any], raw_mask_dir: str, output_dir: str) -> None:
+    """根据匹配结果创建新的日漫 mask，并自适应膨胀"""
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
 
     for page_name, page_entries in match_result["pages"].items():
-        mask_path = Path(raw_mask_dir) / f"mask-{page_name}.png"
+        mask_path = Path(raw_mask_dir) / f"{MASK_PREFIX}{page_name}.png"
         if not mask_path.exists():
-            logger.warning(f"警告: 未找到mask文件: {mask_path}")
+            logger.warning(f"未找到 mask 文件: {mask_path}")
             continue
 
         try:
             with Image.open(mask_path) as orig_mask_img:
                 orig_width, orig_height = orig_mask_img.size
+                original_mask = orig_mask_img.convert('L')  # 复用已打开图像
 
-            # 创建全黑图像
-            new_mask = Image.new('L', (orig_width, orig_height), 0)
-            original_mask = Image.open(mask_path).convert('L')
+                # 创建全黑新 mask
+                new_mask = Image.new('L', (orig_width, orig_height), 0)
 
-            # 粘贴原始mask区域
-            for entry in page_entries:
-                if entry["matched"]:
-                    raw_box = entry["raw_xyxy"]
-                    x1, y1, x2, y2 = raw_box
-                    x1 = max(0, x1)
-                    y1 = max(0, y1)
-                    x2 = min(orig_width, x2)
-                    y2 = min(orig_height, y2)
-                    if x1 >= x2 or y1 >= y2:
-                        continue
+                for entry in page_entries:
+                    if entry.get("matched"):
+                        raw_box = entry["raw_xyxy"]
+                        x1, y1, x2, y2 = raw_box
+                        x1 = max(0, x1)
+                        y1 = max(0, y1)
+                        x2 = min(orig_width, x2)
+                        y2 = min(orig_height, y2)
+                        if x1 >= x2 or y1 >= y2:
+                            continue
+                        mask_region = original_mask.crop((x1, y1, x2, y2))
+                        new_mask.paste(mask_region, (x1, y1))
 
-                    mask_region = original_mask.crop((x1, y1, x2, y2))
-                    new_mask.paste(mask_region, (x1, y1))
+                # 膨胀
+                short_side = min(orig_width, orig_height)
+                kernel_size = max(1, short_side // 100)
+                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
+                mask_np = np.array(new_mask)
+                dilated_np = cv2.dilate(mask_np, kernel)
+                dilated_mask = Image.fromarray(dilated_np)
 
-            # 根据图片短边计算膨胀核大小（可调节分母）
-            short_side = min(orig_width, orig_height)
-            kernel_size = max(1, short_side // 100)  # 例如900x1600 -> 9
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
-
-            # 膨胀
-            mask_np = np.array(new_mask)
-            dilated_np = cv2.dilate(mask_np, kernel)
-            dilated_mask = Image.fromarray(dilated_np)
-
-            # 保存
-            output_path = Path(output_dir) / f"mask-{page_name}.png"
-            dilated_mask.save(output_path)
+                save_path = output_path / f"{MASK_PREFIX}{page_name}.png"
+                dilated_mask.save(save_path)
 
         except Exception as e:
-            logger.error(f"创建页面 {page_name} 的新mask时出错: {str(e)}")
+            logger.exception(f"创建页面 {page_name} 的新 mask 时出错: {e}")
 
-def deduplicate_overlapping_boxes(boxes):
-    """
-    对重叠的文本框去重，保留面积最大的，其他的 matched 置为 0。
-    boxes: list of dict，每个 dict 应包含 'xyxy' 和 'matched'
-    """
-    # 只处理 matched == 1 且 xyxy 有效的框
+
+def deduplicate_overlapping_boxes(boxes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """对重叠的文本框去重，保留面积最大的"""
     n = len(boxes)
-    matched_indices = [i for i, b in enumerate(boxes) if b.get('matched') == 1 and b.get('xyxy') and len(b['xyxy']) == 4]
+    matched_indices = [i for i, b in enumerate(boxes) if b.get('matched') == 1 and b.get('xyxy')]
     if len(matched_indices) <= 1:
         return boxes
 
-    # 计算面积
     areas = {}
     for i in matched_indices:
         x1, y1, x2, y2 = boxes[i]['xyxy']
         areas[i] = (x2 - x1) * (y2 - y1)
 
-    # 使用并查集合并重叠的框
     parent = list(range(n))
+
     def find(x):
         while parent[x] != x:
             parent[x] = parent[parent[x]]
             x = parent[x]
         return x
+
     def union(x, y):
         rx, ry = find(x), find(y)
         if rx != ry:
@@ -233,17 +202,14 @@ def deduplicate_overlapping_boxes(boxes):
                 continue
             xi1, yi1, xi2, yi2 = boxes[i]['xyxy']
             xj1, yj1, xj2, yj2 = boxes[j]['xyxy']
-            # 检查矩形是否重叠
             if xi1 < xj2 and xi2 > xj1 and yi1 < yj2 and yi2 > yj1:
                 union(i, j)
 
-    # 分组
-    groups = {}
+    groups: Dict[int, List[int]] = {}
     for i in matched_indices:
         root = find(i)
         groups.setdefault(root, []).append(i)
 
-    # 每组只保留面积最大的
     for group in groups.values():
         if len(group) <= 1:
             continue
@@ -253,52 +219,59 @@ def deduplicate_overlapping_boxes(boxes):
                 boxes[idx]['matched'] = 0
     return boxes
 
-def match_and_create_masks(raw_annotations_path, text_annotations_path, output_path,
-                          raw_mask_dir, new_mask_dir, status_callback=None):
-    """
-    匹配文本框并创建新mask的完整流程
 
-    参数:
+def match_and_create_masks(raw_annotations_path: str,
+                           text_annotations_path: str,
+                           output_path: str,
+                           raw_mask_dir: str,
+                           new_mask_dir: str,
+                           text_image_dir: Optional[str] = None,
+                           status_callback: Optional[callable] = None) -> bool:
+    """
+    匹配文本框并创建新 mask 的完整流程
+
+    Args:
         raw_annotations_path: 生肉标注文件路径
         text_annotations_path: 熟肉标注文件路径
-        output_path: 匹配结果JSON输出路径
-        raw_mask_dir: 原始mask目录
-        new_mask_dir: 新mask输出目录
+        output_path: 匹配结果 JSON 输出路径
+        raw_mask_dir: 原始 mask 目录
+        new_mask_dir: 新 mask 输出目录
+        text_image_dir: 熟肉图片所在目录（若为 None，则尝试自动推导）
         status_callback: 进度回调函数
     """
-
     try:
         with open(raw_annotations_path, 'r', encoding='utf-8') as f:
             raw_json = json.load(f)
-
         with open(text_annotations_path, 'r', encoding='utf-8') as f:
             text_json = json.load(f)
     except Exception as e:
-        logger.error(f"读取标注文件失败: {e}")
+        logger.exception(f"读取标注文件失败: {e}")
         return False
 
     output_root = Path(raw_annotations_path).parent.parent.parent
     raw_dir = output_root
-    text_dir = Path(text_annotations_path).parent.parent
+
+    # 确定熟肉图片目录
+    if text_image_dir is None:
+        # 默认：output_root / "temp" / "text" （cli.py 会将熟肉图片复制至此）
+        text_dir = output_root / DirPaths.TEMP / "text"
+    else:
+        text_dir = Path(text_image_dir)
 
     matcher = TextBoxMatcher(raw_annotations_path, text_annotations_path)
 
-    result = {
+    result: Dict[str, Any] = {
         "directory": str(output_root.resolve()),
         "pages": {},
         "current_img": None
     }
 
-    raw_pages = list(raw_json.keys())
-    text_pages = list(text_json.keys())
-
+    raw_pages = natsorted(raw_json.keys())
     if not raw_pages:
-        logger.error("错误: 生肉标注文件中没有找到任何页面")
+        logger.error("生肉标注文件中没有找到任何页面")
         return False
 
-    raw_pages = natsorted(raw_pages)
     result["current_img"] = raw_pages[0]
-
     total_pages = len(raw_pages)
 
     for page_idx, page_name in enumerate(raw_pages):
@@ -313,8 +286,8 @@ def match_and_create_masks(raw_annotations_path, text_annotations_path, output_p
             raw_image_path = find_image_file(raw_dir, page_name)
             text_image_path = find_image_file(text_dir, page_name)
 
-            if not raw_image_path or not text_image_path:
-                logger.warning(f"警告: 未找到图片文件 {page_name}")
+            if raw_image_path is None or text_image_path is None:
+                logger.warning(f"未找到图片文件: {page_name}")
                 result["pages"][page_name] = []
                 continue
 
@@ -324,23 +297,24 @@ def match_and_create_masks(raw_annotations_path, text_annotations_path, output_p
                 text_size = text_img.size
 
         except Exception as e:
-            logger.error(f"获取图片尺寸失败 {page_name}: {e}")
+            logger.exception(f"获取图片尺寸失败 {page_name}: {e}")
             result["pages"][page_name] = []
             continue
 
         match_result = matcher.match_boxes(page_name, page_name, raw_size, text_size)
 
+        # 提取原始框列表
         raw_boxes = []
         if "annotations" in raw_json[page_name]:
-            for annotation in raw_json[page_name]["annotations"]:
-                if "xyxy" in annotation:
-                    raw_boxes.append(annotation["xyxy"])
+            for ann in raw_json[page_name]["annotations"]:
+                if "xyxy" in ann:
+                    raw_boxes.append(ann["xyxy"])
 
         text_boxes = []
         if "annotations" in text_json[page_name]:
-            for annotation in text_json[page_name]["annotations"]:
-                if "xyxy" in annotation:
-                    text_boxes.append(annotation["xyxy"])
+            for ann in text_json[page_name]["annotations"]:
+                if "xyxy" in ann:
+                    text_boxes.append(ann["xyxy"])
 
         page_results = []
         for i in range(len(text_boxes)):
@@ -361,6 +335,7 @@ def match_and_create_masks(raw_annotations_path, text_annotations_path, output_p
                     "raw_xyxy": raw_boxes[jp_idx],
                     "matched": 1
                 }
+
         page_results = deduplicate_overlapping_boxes(page_results)
         result["pages"][page_name] = page_results
 
@@ -368,48 +343,47 @@ def match_and_create_masks(raw_annotations_path, text_annotations_path, output_p
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False, separators=(',', ':'))
     except Exception as e:
-        logger.error(f"保存匹配结果失败: {e}")
+        logger.exception(f"保存匹配结果失败: {e}")
         return False
 
-    # 创建新mask
     create_new_masks(result, raw_mask_dir, new_mask_dir)
-    
     return True
 
+
 # ==================== 图片匹配模块 ====================
-def load_model(weights_path, device):
-    """
-    加载预训练的 ResNet18 模型，并移除最后的全连接层以得到特征向量。
-    """
+def load_model(weights_path: Union[str, Path], device: torch.device) -> nn.Module:
+    """加载预训练的 ResNet18 特征提取模型"""
     model = models.resnet18(weights=None)
     num_ftrs = model.fc.in_features
     model.fc = nn.Identity()
-    model.load_state_dict(torch.load(weights_path, map_location=device), strict=False)
+    state_dict = torch.load(weights_path, map_location=device)
+    model.load_state_dict(state_dict, strict=False)
     model = model.to(device)
     model.eval()
     return model
 
-def get_transform():
-    """
-    定义图像预处理流程：调整大小、转换为张量、归一化（使用 ImageNet 统计值）
-    """
+
+def get_transform() -> transforms.Compose:
+    """图像预处理"""
     return transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-def extract_features(image_paths, model, transform, device, batch_size=32):
-    """
-    从一组图像路径中提取特征向量。
-    返回：特征矩阵 (n_samples, feature_dim) 和对应的文件路径列表。
-    """
+
+def extract_features(image_paths: List[str],
+                     model: nn.Module,
+                     transform: transforms.Compose,
+                     device: torch.device,
+                     batch_size: int = 32) -> Tuple[np.ndarray, List[str]]:
+    """提取图像特征向量"""
     features = []
     valid_paths = []
     model.eval()
     with torch.no_grad():
         for i in range(0, len(image_paths), batch_size):
-            batch_paths = image_paths[i:i+batch_size]
+            batch_paths = image_paths[i:i + batch_size]
             batch_tensors = []
             for path in batch_paths:
                 try:
@@ -418,6 +392,7 @@ def extract_features(image_paths, model, transform, device, batch_size=32):
                     batch_tensors.append(img_tensor)
                     valid_paths.append(path)
                 except Exception as e:
+                    logger.warning(f"加载图片失败 {path}: {e}")
                     continue
             if not batch_tensors:
                 continue
@@ -426,89 +401,87 @@ def extract_features(image_paths, model, transform, device, batch_size=32):
             features.append(batch_features)
     if not features:
         return np.array([]), []
-    features = np.vstack(features)
-    return features, valid_paths
+    return np.vstack(features), valid_paths
 
-def match_images(raw_dir, text_dir, model_weights_path, batch_size=32, device=None, generate_thumbnails=False):
+
+def match_images(raw_dir: str,
+                 text_dir: str,
+                 model_weights_path: str,
+                 batch_size: int = 32,
+                 device: Optional[str] = None,
+                 generate_thumbnails: bool = False,
+                 thumb_output_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     匹配 raw 图片和 text 图片，返回匹配结果列表。
 
-    参数：
-        raw_dir (str): 原始图片（生肉）文件夹路径
-        text_dir (str): 翻译后图片（熟肉）文件夹路径
-        model_weights_path (str): ResNet18 预训练权重文件路径
-        batch_size (int): 特征提取时的批大小，默认为 32
-        device (str, optional): 计算设备 ('cuda' 或 'cpu')，默认自动选择
-        generate_thumbnails (bool): 是否生成缩略图，默认 False。若为 True，则在 text_dir/thumbs 下生成缩略图，
-                                    并将缩略图路径添加到返回结果中。
+    Args:
+        raw_dir: 生肉图片目录
+        text_dir: 熟肉图片目录
+        model_weights_path: ResNet18 预训练权重文件路径
+        batch_size: 批大小
+        device: 计算设备 ('cuda' 或 'cpu')，默认自动选择
+        generate_thumbnails: 是否生成缩略图
+        thumb_output_dir: 缩略图输出目录，若为 None 则使用 text_dir 下的 thumbs
 
-    返回：
-        list: 匹配结果列表，每个元素为字典，包含以下字段：
-            - 'raw_path': raw 图片的原始路径
-            - 'text_path': 匹配到的 text 图片的路径
-            - 'similarity': 余弦相似度
-            - 'raw_thumbnail_path': (可选) raw 图片的缩略图路径，仅当 generate_thumbnails=True 时存在
-            - 'text_thumbnail_path': (可选) text 图片的缩略图路径，仅当 generate_thumbnails=True 时存在
+    Returns:
+        匹配结果列表，每个元素为字典
     """
     if device is None:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device_obj = torch.device(device)
 
     raw_images = [str(p) for p in get_image_files(Path(raw_dir))]
     text_images = [str(p) for p in get_image_files(Path(text_dir))]
 
     if not raw_images or not text_images:
-        raise ValueError("No images found in one of the directories.")
+        raise ValueError("未找到任何图片文件。")
 
     # 缩略图生成
     raw_thumb_map = {}
     text_thumb_map = {}
     if generate_thumbnails:
-        thumb_dir = os.path.join(raw_dir, DirPaths.THUMBS)
-        os.makedirs(thumb_dir, exist_ok=True)
+        if thumb_output_dir is None:
+            thumb_dir = Path(text_dir) / DirPaths.THUMBS
+        else:
+            thumb_dir = Path(thumb_output_dir)
+        thumb_dir.mkdir(parents=True, exist_ok=True)
 
-        # 生成 raw 缩略图
         for raw_path in raw_images:
-            filename = os.path.basename(raw_path)
-            name_without_ext = os.path.splitext(filename)[0]
-            thumb_name = f"thumb_raw_{name_without_ext}.jpg"
-            thumb_path = os.path.join(thumb_dir, thumb_name)
+            name = Path(raw_path).stem
+            thumb_path = thumb_dir / f"thumb_raw_{name}.jpg"
             try:
                 img = Image.open(raw_path)
                 img.thumbnail((150, 150))
-                # 转换为 RGB 模式（JPEG 不支持透明）
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
                 img.save(thumb_path, 'JPEG', quality=85)
-                raw_thumb_map[raw_path] = thumb_path
+                raw_thumb_map[raw_path] = str(thumb_path)
             except Exception as e:
-                print(f"生成 raw 缩略图失败 {raw_path}: {e}")
+                logger.warning(f"生成 raw 缩略图失败 {raw_path}: {e}")
 
-        # 生成 text 缩略图
         for text_path in text_images:
-            filename = os.path.basename(text_path)
-            name_without_ext = os.path.splitext(filename)[0]
-            thumb_name = f"thumb_text_{name_without_ext}.jpg"
-            thumb_path = os.path.join(thumb_dir, thumb_name)
+            name = Path(text_path).stem
+            thumb_path = thumb_dir / f"thumb_text_{name}.jpg"
             try:
                 img = Image.open(text_path)
                 img.thumbnail((150, 150))
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
                 img.save(thumb_path, 'JPEG', quality=85)
-                text_thumb_map[text_path] = thumb_path
+                text_thumb_map[text_path] = str(thumb_path)
             except Exception as e:
-                print(f"生成 text 缩略图失败 {text_path}: {e}")
+                logger.warning(f"生成 text 缩略图失败 {text_path}: {e}")
 
-    model = load_model(model_weights_path, device)
+    model = load_model(model_weights_path, device_obj)
     transform = get_transform()
 
-    raw_features, raw_valid = extract_features(raw_images, model, transform, device, batch_size)
+    raw_features, raw_valid = extract_features(raw_images, model, transform, device_obj, batch_size)
     if raw_features.size == 0:
-        raise RuntimeError("No valid raw images after loading.")
+        raise RuntimeError("无法从生肉图片中提取有效特征。")
 
-    text_features, text_valid = extract_features(text_images, model, transform, device, batch_size)
+    text_features, text_valid = extract_features(text_images, model, transform, device_obj, batch_size)
     if text_features.size == 0:
-        raise RuntimeError("No valid text images after loading.")
+        raise RuntimeError("无法从熟肉图片中提取有效特征。")
 
     sim_matrix = cosine_similarity(raw_features, text_features)
 
@@ -518,15 +491,15 @@ def match_images(raw_dir, text_dir, model_weights_path, batch_size=32, device=No
         best_sim = sim_matrix[i, best_idx]
         text_path = text_valid[best_idx]
 
-        result_item = {
+        match_item = {
             'raw_path': raw_path,
             'text_path': text_path,
-            'similarity': best_sim
+            'similarity': float(best_sim)
         }
         if generate_thumbnails:
-            result_item['raw_thumbnail_path'] = raw_thumb_map.get(raw_path, None)
-            result_item['text_thumbnail_path'] = text_thumb_map.get(text_path, None)
+            match_item['raw_thumbnail_path'] = raw_thumb_map.get(raw_path)
+            match_item['text_thumbnail_path'] = text_thumb_map.get(text_path)
 
-        matches.append(result_item)
+        matches.append(match_item)
 
     return matches
