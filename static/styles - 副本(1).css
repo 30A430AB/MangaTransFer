@@ -34,7 +34,8 @@ body, html, #__nuxt, #__nuxt-container {
 
 .thumbnail-card:hover {
     border: 1px solid #66ccff;
-    box-shadow: 0 4px 12px rgba(102, 204, 255, 0.2);  /* 统一主题蓝淡阴影 */
+    /* transform: translateY(-4px); */
+    box-shadow: 0 4px 12px rgba(74, 144, 226, 0.1);
 }
 
 .thumbnail-card::before {
@@ -69,7 +70,7 @@ body, html, #__nuxt, #__nuxt-container {
     -webkit-backdrop-filter: blur(8px);
     border-radius: 10px;
     border: 1px solid rgba(226, 232, 240, 0.6);
-    box-shadow: 0 2px 8px rgba(102, 204, 255, 0.08);   /* 改用主题色 */
+    box-shadow: 0 2px 8px rgba(74, 144, 226, 0.08);
     transition: all 0.3s ease;
     margin-bottom: 8px;
     cursor: pointer;
@@ -78,7 +79,7 @@ body, html, #__nuxt, #__nuxt-container {
 .text-block-card:hover {
     background: rgba(255, 255, 255, 0.95);
     border-color: #66ccff;
-    box-shadow: 0 6px 16px rgba(102, 204, 255, 0.15);   /* 统一 */
+    box-shadow: 0 6px 16px rgba(74, 144, 226, 0.12);
     transform: translateY(-2px);
 }
 
@@ -122,25 +123,20 @@ body, html, #__nuxt, #__nuxt-container {
 }
 
 .text-block-button:hover {
-    color: #66ccff;                              /* 统一主题色 */
-    background: rgba(102, 204, 255, 0.12);
+    color: #4A90E2;
+    background: rgba(74, 144, 226, 0.1);
 }
 
 .text-block-button .material-icons {
     font-size: 18px !important;
 }
 
-/* 合并工具按钮样式，避免重复定义 */
 .tool-button {
-    width: 40px !important;
-    height: 40px !important;
-    min-width: 40px !important;
-    padding: 0 !important;
-    margin: 4px 0 !important;
-    border-radius: 8px;
+    width: 70%;
     aspect-ratio: 1/1;
     background: linear-gradient(135deg, #FFFFFF 0%, #F8FAFC 100%);
     border: 1px solid #E2E8F0;
+    border-radius: 8px;
     color: #64748B;
     display: flex;
     align-items: center;
@@ -151,15 +147,11 @@ body, html, #__nuxt, #__nuxt-container {
 }
 
 .tool-button:hover {
-    border-color: #66ccff;
-    color: #66ccff;
-    background: linear-gradient(135deg, #F0F9FF 0%, #E6F7FF 100%);
-    box-shadow: 0 4px 8px rgba(102, 204, 255, 0.15);
+    border-color: #4A90E2;
+    color: #4A90E2;
+    background: linear-gradient(135deg, #F1F5F9 0%, #E2E8F0 100%);
+    box-shadow: 0 4px 8px rgba(74, 144, 226, 0.1);
     transform: translateY(-1px);
-}
-
-.tool-button .q-icon {
-    font-size: 24px !important;
 }
 
 #canvas-container {
@@ -177,7 +169,20 @@ body, html, #__nuxt, #__nuxt-container {
     cursor: default;
 }
 
-/* ==================== 全局滚动条样式（可爱清新风格） ==================== */
+.tool-button {
+    width: 40px !important;
+    height: 40px !important;
+    min-width: 40px !important;
+    padding: 0 !important;
+    margin: 4px 0 !important;
+    border-radius: 8px;
+}
+
+.tool-button .q-icon {
+    font-size: 24px !important;
+}
+
+/* ==================== 全局滚动条样式（统一现代风格） ==================== */
 ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
@@ -187,52 +192,18 @@ body, html, #__nuxt, #__nuxt-container {
     border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb {
-    background: rgba(102, 204, 255, 0.4);        /* 主题蓝浅色 */
+    background: rgba(224, 224, 224, 0.6);
     border-radius: 4px;
     transition: background 0.3s ease;
 }
 ::-webkit-scrollbar-thumb:hover {
-    background: rgba(102, 204, 255, 0.7);
+    background: rgba(74, 144, 226, 0.6);
 }
 ::-webkit-scrollbar-thumb:active {
-    background: #66ccff;
+    background: rgba(74, 144, 226, 0.8);
 }
 /* Firefox 滚动条样式 */
 * {
     scrollbar-width: thin;
-    scrollbar-color: rgba(102, 204, 255, 0.4) rgba(245, 247, 250, 0.8);
-}
-
-/* ==================== 匹配面板滚动条（可爱清新风格） ==================== */
-/* 针对 NiceGUI 滚动区域内的滚动条 */
-.q-scrollarea__thumb {
-    background: rgba(102, 204, 255, 0.4) !important;
-    transition: background 0.3s ease !important;
-}
-
-.q-scrollarea__thumb:hover {
-    background: rgba(102, 204, 255, 0.7) !important;
-}
-
-.q-scrollarea__thumb:active {
-    background: #66ccff !important;
-}
-
-/* 滚动条轨道背景（可选） */
-.q-scrollarea__track {
-    background: rgba(245, 247, 250, 0.8) !important;
-}
-
-/* 同时保留原生滚动条样式，作为后备 */
-.match-scroll-area::-webkit-scrollbar-thumb {
-    background: rgba(102, 204, 255, 0.4) !important;
-    border-radius: 4px;
-}
-
-.match-scroll-area::-webkit-scrollbar-thumb:hover {
-    background: rgba(102, 204, 255, 0.7) !important;
-}
-
-.match-scroll-area::-webkit-scrollbar-thumb:active {
-    background: #66ccff !important;
+    scrollbar-color: rgba(224, 224, 224, 0.6) rgba(245, 247, 250, 0.8);
 }
