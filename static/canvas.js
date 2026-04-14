@@ -586,17 +586,14 @@ function isMaskBlank(canvas) {
 
 function loadLayers(originalUrl, inpaintedUrl, textBlocks) {
     return new Promise((resolve, reject) => {
-        // 清除旧的参考图，避免残留
-        if (workingReferenceImage) {
-            canvas.remove(workingReferenceImage);
-            workingReferenceImage = null;
-            workingReferenceVisible = false;
-            updateSplitButtonActive(false);  // 更新分栏按钮样式
-        }
         if (!canvas) {
             reject('Canvas not initialized');
             return;
         }
+
+        // 保存当前渲染状态，并暂停自动渲染
+        const prevRenderOnAddRemove = canvas.renderOnAddRemove;
+        canvas.renderOnAddRemove = false;
 
         const loadImagePromise = (url) => {
             return new Promise((res, rej) => {
@@ -611,99 +608,136 @@ function loadLayers(originalUrl, inpaintedUrl, textBlocks) {
             });
         };
 
-        // 移除旧对象
-        if (comicImage) canvas.remove(comicImage);
-        if (inpaintedImage) canvas.remove(inpaintedImage);
-        textImages.forEach(img => canvas.remove(img));
-        textImages = [];
+        // 先异步加载所有需要的图片（原图、修复图、文本块）
+        Promise.all([
+            loadImagePromise(originalUrl),
+            loadImagePromise(inpaintedUrl),
+            Promise.all((textBlocks || []).map(block => loadImagePromise(block.imageUrl)))
+        ]).then(([originalImg, inpaintedImg, textImgs]) => {
+            // 加载完成后，开始移除旧对象（此时画布不会自动渲染）
+            if (comicImage) canvas.remove(comicImage);
+            if (inpaintedImage) canvas.remove(inpaintedImage);
+            textImages.forEach(img => canvas.remove(img));
+            textImages = [];
 
-        Promise.all([loadImagePromise(originalUrl), loadImagePromise(inpaintedUrl)])
-            .then(([originalImg, inpaintedImg]) => {
-                comicImage = originalImg;
-                comicImage.set({
+            // 处理原图
+            comicImage = originalImg;
+            comicImage.set({
+                selectable: false,
+                hasControls: false,
+                hasBorders: false,
+                left: 0,
+                top: 0
+            });
+            canvas.add(comicImage);
+            canvas.sendToBack(comicImage);
+            comicImage.set('opacity', currentRawOpacity / 100);
+
+            imageWidth = comicImage.width;
+            imageHeight = comicImage.height;
+
+            // 处理修复图
+            if (inpaintedImg) {
+                inpaintedImage = inpaintedImg;
+                inpaintedImage.set({
                     selectable: false,
                     hasControls: false,
                     hasBorders: false,
                     left: 0,
                     top: 0
                 });
-                canvas.add(comicImage);
-                canvas.sendToBack(comicImage);
-                comicImage.set('opacity', currentRawOpacity / 100);
+                if (Math.abs(inpaintedImage.width - imageWidth) > 1 || Math.abs(inpaintedImage.height - imageHeight) > 1) {
+                    inpaintedImage.scaleToWidth(imageWidth);
+                    inpaintedImage.scaleToHeight(imageHeight);
+                }
+                canvas.add(inpaintedImage);
+                canvas.bringForward(inpaintedImage);
+                inpaintedImage.set('opacity', currentTextOpacity / 100);
+            }
 
-                imageWidth = comicImage.width;
-                imageHeight = comicImage.height;
-
-                if (inpaintedImg) {
-                    inpaintedImage = inpaintedImg;
-                    inpaintedImage.set({
-                        selectable: false,
-                        hasControls: false,
-                        hasBorders: false,
-                        left: 0,
-                        top: 0
-                    });
-                    if (Math.abs(inpaintedImage.width - imageWidth) > 1 || Math.abs(inpaintedImage.height - imageHeight) > 1) {
-                        inpaintedImage.scaleToWidth(imageWidth);
-                        inpaintedImage.scaleToHeight(imageHeight);
+            // 处理文本块图片
+            if (textImgs && textImgs.length > 0) {
+                textImgs.forEach((img, idx) => {
+                    if (img) {
+                        const block = textBlocks[idx];
+                        img.set({
+                            left: block.left,
+                            top: block.top,
+                            selectable: false,
+                            hasControls: false,
+                            hasBorders: false,
+                            visible: block.visible !== undefined ? block.visible : true,
+                            evented: true,
+                            hoverCursor: 'pointer',
+                        });
+                        canvas.add(img);
+                        textImages[idx] = img;
                     }
-                    canvas.add(inpaintedImage);
-                    canvas.bringForward(inpaintedImage);
-                    inpaintedImage.set('opacity', currentTextOpacity / 100);
-                }
+                });
+                textImages.forEach(img => {
+                    img.set('opacity', currentTextLayerOpacity / 100);
+                });
+            }
 
-                currentOriginalUrl = originalUrl;
-                currentInpaintedUrl = inpaintedUrl;
+            // 更新 URL 记录
+            currentOriginalUrl = originalUrl;
+            currentInpaintedUrl = inpaintedUrl;
 
-                if (textBlocks && textBlocks.length > 0) {
-                    const textPromises = textBlocks.map(block => {
-                        return loadImagePromise(block.imageUrl).then(img => {
-                            if (img) {
-                                img.set({
-                                    left: block.left,
-                                    top: block.top,
-                                    selectable: false,
-                                    hasControls: false,
-                                    hasBorders: false,
-                                    visible: block.visible !== undefined ? block.visible : true,
-                                    evented: true,
-                                    hoverCursor: 'pointer',
-                                });
-                                return img; // 返回图像对象
-                            }
-                            return null;
-                        });
-                    });
-                    return Promise.all(textPromises).then(images => {
-                        images.forEach((img, idx) => {
-                            if (img) {
-                                canvas.add(img);
-                                textImages[idx] = img; // 按索引赋值，保证顺序
-                            }
-                        });
-                        // 然后设置透明度等
-                        textImages.forEach(img => {
-                            img.set('opacity', currentTextLayerOpacity / 100);
-                        });
-                        if (inpaintedImage) {
-                            inpaintedImage.set('opacity', currentTextOpacity / 100);
-                        }
-                        fitImageToCanvas();
-                        canvas.renderAll();
-                        bindCanvasEvents();
-                        resolve();
-                    });
-                } else {
-                    fitImageToCanvas();
-                    canvas.renderAll();
-                    bindCanvasEvents();
-                    resolve();
-                }
-            })
-            .catch(err => {
-                console.error('Error loading layers:', err);
-                reject(err);
-            });
+            // 处理参考图（如果存在）
+            if (workingReferenceImage) {
+                // 参考图需要根据新图片尺寸重新放置
+                workingReferenceImage.set({
+                    left: -imageWidth,
+                    top: 0,
+                    visible: workingReferenceVisible
+                });
+                canvas.add(workingReferenceImage);
+                canvas.sendToBack(workingReferenceImage);
+            }
+
+            // ---------- 预先计算新视图参数（此时暂不应用到画布）----------
+            const containerWidth = canvasContainer.clientWidth;
+            const containerHeight = canvasContainer.clientHeight;
+            let targetWidth, targetHeight;
+            if (workingReferenceImage && workingReferenceImage.visible) {
+                targetWidth = imageWidth * 2;
+                targetHeight = imageHeight;
+            } else {
+                targetWidth = imageWidth;
+                targetHeight = imageHeight;
+            }
+            const scaleX = containerWidth / targetWidth;
+            const scaleY = containerHeight / targetHeight;
+            const newScale = Math.min(scaleX, scaleY);
+            const scaledWidth = targetWidth * newScale;
+            const scaledHeight = targetHeight * newScale;
+            const newLeft = (containerWidth - scaledWidth) / 2;
+            const newTop = (containerHeight - scaledHeight) / 2;
+
+            // 恢复自动渲染（但尚未触发任何重绘）
+            canvas.renderOnAddRemove = prevRenderOnAddRemove;
+
+            // 一次性设置缩放和平移（这些操作会触发一次渲染）
+            canvas.setZoom(newScale);
+            canvas.viewportTransform[4] = newLeft;
+            canvas.viewportTransform[5] = newTop;
+            currentScale = newScale;
+            minScale = newScale;
+
+            // 应用边界约束（可能会微调 viewportTransform，但不额外渲染）
+            applyViewportBoundaries();
+
+            // 绑定事件并最终渲染（确保所有修改一次性呈现）
+            bindCanvasEvents();
+            canvas.renderAll();
+
+            resolve();
+        }).catch(err => {
+            // 出错时恢复渲染状态
+            canvas.renderOnAddRemove = prevRenderOnAddRemove;
+            console.error('Error loading layers:', err);
+            reject(err);
+        });
     });
 }
 
