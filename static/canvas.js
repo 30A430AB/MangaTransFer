@@ -594,7 +594,7 @@ async function onPathCreated(e) {
                 CanvasState.canvas.freeDrawingBrush = new fabric.PencilBrush(CanvasState.canvas);
             }
             CanvasState.canvas.freeDrawingBrush.color = CanvasState.currentTool === 'restoreBrush' 
-                ? 'rgba(102, 204, 255, 0.6)' : 'rgba(144, 238, 144, 0.6)';
+                ? 'rgba(144, 238, 144, 0.6)' : 'rgba(102, 204, 255, 0.6)';
             CanvasState.canvas.freeDrawingBrush.width = CanvasState.brushSize;
         }
         CanvasState.canvas.renderAll();
