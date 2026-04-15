@@ -467,83 +467,86 @@ window.initMatchResultPanel = function(textDir, thumbDir) {
     window.textDir = textDir;
     window.thumbDir = thumbDir;
 
-    // 使用事件委托处理删除按钮和缩略图点击
-    const container = document.querySelector('.q-dialog-plugin'); // 匹配结果对话框容器
-    if (!container) return;
+    setTimeout(() => {
+        const container = document.getElementById('match-result-dialog');
+        if (!container) return;
 
-    // 移除之前绑定的监听器（避免重复）
-    if (container._matchPanelHandler) {
-        container.removeEventListener('click', container._matchPanelHandler);
-    }
+        if (container._matchPanelHandler) {
+            container.removeEventListener('click', container._matchPanelHandler);
+            container.removeEventListener('mouseenter', container._matchPanelHandler);
+            container.removeEventListener('mouseleave', container._matchPanelHandler);
+        }
 
-    const clickHandler = async function(e) {
-        // 处理删除按钮
-        const delBtn = e.target.closest('.del-btn');
-        if (delBtn) {
-            e.stopPropagation();
-            const wrapper = delBtn.closest('.thumb-wrapper');
-            if (!wrapper || wrapper.dataset.deleted === 'true') return;
-            
-            const img = wrapper.querySelector('img');
-            wrapper.dataset.deleted = 'true';
-            img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-            img.style.height = '150px';
-            img.style.width = 'auto';
-            img.style.objectFit = 'none';
-            img.style.backgroundImage = "url('/static/icons/add.svg')";
-            img.style.backgroundRepeat = 'no-repeat';
-            img.style.backgroundPosition = 'center';
-            img.style.backgroundSize = '24px 24px';
-            delBtn.style.display = 'none';
-            
-            const nameLabel = wrapper.closest('.row')?.querySelector('.text-col .text-xs');
-            if (nameLabel) nameLabel.innerText = '';
-            
-            // 绑定点击重新选择事件
-            img.onclick = () => {
-                if (wrapper.dataset.deleted === 'true') {
+        const handler = function(e) {
+            // 仅当为点击事件且目标为删除按钮或其子元素时执行删除
+            if (e.type === 'click') {
+                const delBtn = e.target.closest('.del-btn');
+                if (delBtn) {
+                    e.stopPropagation();
+                    const wrapper = delBtn.closest('.thumb-wrapper');
+                    if (!wrapper || wrapper.dataset.deleted === 'true') return;
+
+                    const img = wrapper.querySelector('img');
+                    wrapper.dataset.deleted = 'true';
+                    img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+                    img.style.height = '150px';
+                    img.style.width = 'auto';
+                    img.style.objectFit = 'none';
+                    img.style.backgroundImage = "url('/static/icons/add.svg')";
+                    img.style.backgroundRepeat = 'no-repeat';
+                    img.style.backgroundPosition = 'center';
+                    img.style.backgroundSize = '24px 24px';
+                    delBtn.style.display = 'none';
+
+                    const nameLabel = wrapper.closest('.row')?.querySelector('.text-col .text-xs');
+                    if (nameLabel) nameLabel.innerText = '';
+
+                    img.onclick = () => {
+                        if (wrapper.dataset.deleted === 'true') {
+                            const row = wrapper.closest('[data-raw-path]');
+                            showImageSelector(row);
+                        }
+                    };
+
                     const row = wrapper.closest('[data-raw-path]');
-                    showImageSelector(row);
+                    if (row) {
+                        const rawPath = row.getAttribute('data-raw-path');
+                        fetch('/update_match_text', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ raw_path: rawPath, new_text_path: '', text_dir: window.textDir })
+                        }).then(res => res.json()).then(data => {
+                            if (!data.success) console.error('清空 text_path 失败', data);
+                        }).catch(err => console.error('清空 text_path 出错', err));
+                    }
+                    return;
                 }
-            };
-            
-            const row = wrapper.closest('[data-raw-path]');
-            if (row) {
-                const rawPath = row.getAttribute('data-raw-path');
-                fetch('/update_match_text', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ raw_path: rawPath, new_text_path: '', text_dir: window.textDir })
-                }).then(res => res.json()).then(data => {
-                    if (!data.success) console.error('清空 text_path 失败', data);
-                }).catch(err => console.error('清空 text_path 出错', err));
             }
-            return;
-        }
 
-        // 处理缩略图包装器的鼠标悬停（显示删除按钮）
-        const wrapper = e.target.closest('.thumb-wrapper');
-        if (wrapper) {
+            // 处理鼠标悬停显示/隐藏删除按钮（仅当未删除状态）
+            if (e.type === 'mouseenter' || e.type === 'mouseleave') {
+                const wrapper = e.target.closest('.thumb-wrapper');
+                if (wrapper && wrapper.dataset.deleted === 'false') {
+                    const delBtn = wrapper.querySelector('.del-btn');
+                    if (delBtn) {
+                        delBtn.style.display = e.type === 'mouseenter' ? 'flex' : 'none';
+                    }
+                }
+            }
+        };
+
+        container.addEventListener('click', handler);
+        container.addEventListener('mouseenter', handler, true);
+        container.addEventListener('mouseleave', handler, true);
+        container._matchPanelHandler = handler;
+
+        // 初始化
+        container.querySelectorAll('.thumb-wrapper').forEach(wrapper => {
             const delBtn = wrapper.querySelector('.del-btn');
-            if (e.type === 'mouseenter' && wrapper.dataset.deleted === 'false') {
-                delBtn.style.display = 'flex';
-            } else if (e.type === 'mouseleave') {
-                delBtn.style.display = 'none';
-            }
-        }
-    };
-
-    container.addEventListener('click', clickHandler);
-    container.addEventListener('mouseenter', clickHandler, true); // 捕获阶段处理
-    container.addEventListener('mouseleave', clickHandler, true);
-    container._matchPanelHandler = clickHandler;
-
-    // 初始化现有缩略图的删除按钮隐藏状态
-    document.querySelectorAll('.thumb-wrapper').forEach(wrapper => {
-        const delBtn = wrapper.querySelector('.del-btn');
-        if (delBtn) delBtn.style.display = 'none';
-        wrapper.dataset.deleted = 'false';
-    });
+            if (delBtn) delBtn.style.display = 'none';
+            wrapper.dataset.deleted = 'false';
+        });
+    }, 150);
 };
 
 // 图片选择器模态框（独立函数，避免闭包问题）

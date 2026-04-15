@@ -394,8 +394,7 @@ async def show_match_result_panel(matches, raw_dir, text_dir):
         app.add_static_files('/thumbs', str(thumb_dir))
         app._thumb_dirs.add(str(thumb_dir))
 
-    with ui.dialog(value=True).props('persistent') as result_dialog, ui.card().style('width: 85vw; max-width: 1200px; max-height: 85vh;'):
-        ui.label('图片匹配结果').classes('text-h6 w-full text-center mb-3')
+    with ui.dialog(value=True).props('persistent') as result_dialog, ui.card().style('width: 85vw; max-width: 1200px; max-height: 85vh;').props('id="match-result-dialog"'):
         with ui.scroll_area().classes('match-scroll-area').style('height: calc(85vh - 160px); width: 100%;'):
             with ui.row().classes('w-full flex-nowrap items-center p-2 bg-gray-100 sticky top-0 z-10'):
                 ui.label('原始图片').classes('w-1/3 text-center font-bold')
@@ -717,13 +716,23 @@ async def update_match_text(request: Request):
         data = await request.json()
         raw_path = data.get('raw_path')
         new_text_path = data.get('new_text_path')
-        text_dir = data.get('text_dir')  # 前端应传递 text_dir 用于校验
+        text_dir = data.get('text_dir')
         
         final_matches = app.storage.general.get('final_matches')
         if final_matches is None:
             return {'error': '没有匹配数据，请重新进行图片匹配'}
         
-        # 安全性校验：确保新路径在 text_dir 目录下
+        # 如果 new_text_path 为空，表示清空匹配
+        if not new_text_path:
+            for match in final_matches:
+                if match['raw_path'] == raw_path:
+                    match['text_path'] = ''
+                    match['text_thumbnail_path'] = None
+                    app.storage.general['final_matches'] = final_matches
+                    return {'success': True}
+            return {'error': '未找到匹配项'}
+        
+        # 非空路径才进行安全校验
         if text_dir:
             text_dir_path = Path(text_dir).resolve()
             new_path = Path(new_text_path).resolve()

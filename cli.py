@@ -123,6 +123,9 @@ class MangaTransFerPipeline:
         dst_dir = directories['temp']
         dst_dir.mkdir(parents=True, exist_ok=True)
 
+        # 用于记录实际匹配数量（在后续分支中赋值）
+        effective_match_count = 0
+
         # ----- 复制阶段 -----
         if self.precomputed_matches is not None:
             self.logger.info("使用 GUI 传入的匹配结果...")
@@ -130,11 +133,11 @@ class MangaTransFerPipeline:
             if not matches:
                 raise Exception("匹配结果为空")
 
+            valid_matches = []
             for match in matches:
                 text_path_str = match.get('text_path', '')
                 if not text_path_str or not Path(text_path_str).exists():
                     raw_path = Path(match['raw_path'])
-                    self.logger.warning(f"跳过匹配项 {raw_path.name}: 未选择文本图片")
                     continue
 
                 raw_path = Path(match['raw_path'])
@@ -144,6 +147,10 @@ class MangaTransFerPipeline:
                 target_name = raw_stem + text_suffix
                 dst_path = dst_dir / target_name
                 shutil.copy2(text_path, dst_path)
+                valid_matches.append(match)
+
+            self.precomputed_matches = valid_matches
+            effective_match_count = len(valid_matches)
 
         elif self.automatch:
             self.logger.info("启用自动匹配模式，正在计算图片相似度...")
@@ -165,6 +172,9 @@ class MangaTransFerPipeline:
                 target_name = raw_stem + text_suffix
                 dst_path = dst_dir / target_name
                 shutil.copy2(text_path, dst_path)
+
+            effective_match_count = len(matches)
+
         else:
             self.logger.info("未启用自动匹配，复制所有文本图片...")
             text_images = self._get_sorted_images(src_dir)
@@ -175,16 +185,15 @@ class MangaTransFerPipeline:
                 dst_path = dst_dir / img_path.name
                 shutil.copy2(img_path, dst_path)
 
+            effective_match_count = len(text_images)
+
         self.text_dir = dst_dir
 
         # ----- 调整尺寸阶段 -----
-        raw_images = self._get_sorted_images(self.raw_dir)
-        total_raw = len(raw_images)
-
         def resize_callback(idx, total):
             pbar.update(1)
 
-        with tqdm(total=total_raw, desc="尺寸调整", unit="张",
+        with tqdm(total=effective_match_count, desc="尺寸调整", unit="张",
                   bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
             resize_text_images_to_match_raw(
                 raw_dir=str(self.raw_dir),

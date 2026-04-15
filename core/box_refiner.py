@@ -88,7 +88,6 @@ class CoordinateAdjuster:
             for page_name, entries in pages.items():
                 mask_path = os.path.join(self.mask_dir, f"{page_name}.png")
                 if not os.path.exists(mask_path):
-                    logger.warning(f"mask 文件不存在: {mask_path}，跳过 {page_name}")
                     processed += 1
                     if self.status_callback:
                         self.status_callback(processed, total)
