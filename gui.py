@@ -17,9 +17,8 @@ from loguru import logger
 
 from core.matching import match_images
 from core.inpainting import Inpainter
-from core.config import SUPPORTED_EXTENSIONS, DirPaths, DataPaths, InpaintAlgorithm
+from core.config import SUPPORTED_EXTENSIONS, DirPaths, DataPaths, InpaintAlgorithm, SVG_ICONS
 from cli import MangaTransFerPipeline
-from svg_icons import SVG_ICONS
 
 # ==================== 全局设置 ====================
 multiprocessing.set_start_method('spawn', force=True)
