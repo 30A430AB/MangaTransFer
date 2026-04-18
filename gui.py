@@ -604,7 +604,7 @@ with ui.element('div').classes('fixed top-0 left-0 w-full h-full').style('margin
                             # 斜体
                             ui.button(icon='format_italic', color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.toggleItalic()')).tooltip('斜体')
                             # 字体颜色
-                            with ui.button(color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.chooseTextColor()')).tooltip('字体颜色'):
+                            with ui.button(color='transparent').props('flat dense id="font-color-btn"').on('click', lambda: ui.run_javascript('window.chooseTextColor()')).tooltip('字体颜色'):
                                 ui.html(f'<img src="{SVG_ICONS["format_color_text"]}" style="width:24px;height:24px;">')
                             # 字体描边
                             ui.button(icon='o_font_download', color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.setTextStroke()')).tooltip('字体描边')

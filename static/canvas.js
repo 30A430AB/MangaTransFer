@@ -1300,6 +1300,406 @@ window.selectFontFamily = function() {
     setTimeout(() => document.addEventListener('click', closeHandler), 0);
 };
 
+// ==================== 字号调整功能 ====================
+window.increaseFontSize = function() {
+    const activeObj = CanvasState.canvas.getActiveObject();
+    if (!activeObj || (activeObj.type !== 'textbox' && activeObj.type !== 'i-text' && activeObj.type !== 'text')) {
+        window.showToast && window.showToast('请先选中一个文本框', 'warning');
+        return;
+    }
+    const currentSize = activeObj.fontSize || 24;
+    const newSize = Math.min(currentSize + 2, 200); // 每次增加2px，上限200px
+    activeObj.set('fontSize', newSize);
+    CanvasState.canvas.renderAll();
+    
+    // 将px换算为pt (1pt ≈ 1.333px)
+    const sizeInPt = (newSize * 0.75).toFixed(1);
+    window.showToast && window.showToast(`字号: ${sizeInPt} pt`, 'info');
+};
+
+window.decreaseFontSize = function() {
+    const activeObj = CanvasState.canvas.getActiveObject();
+    if (!activeObj || (activeObj.type !== 'textbox' && activeObj.type !== 'i-text' && activeObj.type !== 'text')) {
+        window.showToast && window.showToast('请先选中一个文本框', 'warning');
+        return;
+    }
+    const currentSize = activeObj.fontSize || 24;
+    const newSize = Math.max(currentSize - 2, 8); // 每次减小2px，下限8px
+    activeObj.set('fontSize', newSize);
+    CanvasState.canvas.renderAll();
+    
+    const sizeInPt = (newSize * 0.75).toFixed(1);
+    window.showToast && window.showToast(`字号: ${sizeInPt} pt`, 'info');
+};
+
+// ==================== 加粗 / 斜体功能 ====================
+window.toggleFontBold = function() {
+    const activeObj = CanvasState.canvas.getActiveObject();
+    if (!activeObj || (activeObj.type !== 'textbox' && activeObj.type !== 'i-text' && activeObj.type !== 'text')) {
+        window.showToast && window.showToast('请先选中一个文本框', 'warning');
+        return;
+    }
+    // 判断当前是否为粗体
+    const isBold = activeObj.fontWeight === 'bold' || activeObj.fontWeight >= 600;
+    activeObj.set('fontWeight', isBold ? 'normal' : 'bold');
+    CanvasState.canvas.renderAll();
+};
+
+window.toggleItalic = function() {
+    const activeObj = CanvasState.canvas.getActiveObject();
+    if (!activeObj || (activeObj.type !== 'textbox' && activeObj.type !== 'i-text' && activeObj.type !== 'text')) {
+        window.showToast && window.showToast('请先选中一个文本框', 'warning');
+        return;
+    }
+    // 判断当前是否为斜体
+    const isItalic = activeObj.fontStyle === 'italic';
+    activeObj.set('fontStyle', isItalic ? 'normal' : 'italic');
+    CanvasState.canvas.renderAll();
+};
+
+// ==================== 字体颜色选择（自定义画布颜色选择器） ====================
+window.chooseTextColor = function() {
+    const activeObj = CanvasState.canvas.getActiveObject();
+    if (!activeObj || (activeObj.type !== 'textbox' && activeObj.type !== 'i-text' && activeObj.type !== 'text')) {
+        window.showToast && window.showToast('请先选中一个文本框', 'warning');
+        return;
+    }
+
+    // 移除已有面板
+    const existingPanel = document.getElementById('color-picker-panel');
+    if (existingPanel) {
+        existingPanel.remove();
+        return;
+    }
+
+    // 创建悬浮面板
+    const panel = document.createElement('div');
+    panel.id = 'color-picker-panel';
+    panel.style.cssText = `
+        position: fixed;
+        width: 260px;
+        background: white;
+        border: 1px solid #E0E0E0;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        z-index: 10000;
+        padding: 12px;
+        box-sizing: border-box;
+        user-select: none;
+    `;
+
+    // 定位到右侧按钮栏左侧
+    const rightBar = document.getElementById('right-button-bar');
+    if (rightBar) {
+        const rect = rightBar.getBoundingClientRect();
+        panel.style.right = (window.innerWidth - rect.left + 10) + 'px';
+        panel.style.top = Math.max(10, rect.top) + 'px';
+    } else {
+        panel.style.right = '50px';
+        panel.style.top = '100px';
+    }
+
+    // 当前颜色
+    let currentColor = activeObj.fill || '#2c3e50';
+    // 转换为HSV便于处理
+    let hsv = hexToHsv(currentColor);
+
+    // 创建饱和度/明度画布
+    const svCanvas = document.createElement('canvas');
+    svCanvas.width = 200;
+    svCanvas.height = 200;
+    svCanvas.style.cssText = `
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: 4px;
+        cursor: crosshair;
+        margin-bottom: 8px;
+    `;
+    const svCtx = svCanvas.getContext('2d');
+
+    // 创建色相滑块画布
+    const hueCanvas = document.createElement('canvas');
+    hueCanvas.width = 200;
+    hueCanvas.height = 20;
+    hueCanvas.style.cssText = `
+        display: block;
+        width: 100%;
+        height: 20px;
+        border-radius: 4px;
+        cursor: ew-resize;
+        margin-bottom: 12px;
+    `;
+    const hueCtx = hueCanvas.getContext('2d');
+
+    // 预览色块
+    const preview = document.createElement('div');
+    preview.style.cssText = `
+        width: 100%;
+        height: 30px;
+        border-radius: 4px;
+        border: 1px solid #ddd;
+        margin-bottom: 12px;
+    `;
+
+    // 颜色值输入
+    const hexInput = document.createElement('input');
+    hexInput.type = 'text';
+    hexInput.value = currentColor;
+    hexInput.style.cssText = `
+        width: 100%;
+        padding: 6px 8px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        margin-bottom: 12px;
+        box-sizing: border-box;
+    `;
+
+    // 按钮
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = `
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+    `;
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = '取消';
+    cancelBtn.style.cssText = `padding:6px 12px;border:1px solid #ddd;background:white;border-radius:4px;cursor:pointer;`;
+    const applyBtn = document.createElement('button');
+    applyBtn.textContent = '应用';
+    applyBtn.style.cssText = `padding:6px 12px;border:none;background:#1976D2;color:white;border-radius:4px;cursor:pointer;`;
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(applyBtn);
+
+    panel.appendChild(svCanvas);
+    panel.appendChild(hueCanvas);
+    panel.appendChild(preview);
+    panel.appendChild(hexInput);
+    panel.appendChild(btnRow);
+    document.body.appendChild(panel);
+
+    // 绘制函数
+    function drawSVPanel(h) {
+        const width = svCanvas.width;
+        const height = svCanvas.height;
+        const imageData = svCtx.createImageData(width, height);
+        const data = imageData.data;
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const s = x / width;
+                const v = 1 - y / height;
+                const rgb = hsvToRgb(h, s, v);
+                const idx = (y * width + x) * 4;
+                data[idx] = rgb[0];
+                data[idx+1] = rgb[1];
+                data[idx+2] = rgb[2];
+                data[idx+3] = 255;
+            }
+        }
+        svCtx.putImageData(imageData, 0, 0);
+
+        // 绘制指示圆点
+        const dotX = hsv.s * width;
+        const dotY = (1 - hsv.v) * height;
+        svCtx.beginPath();
+        svCtx.arc(dotX, dotY, 5, 0, 2 * Math.PI);
+        svCtx.strokeStyle = '#fff';
+        svCtx.lineWidth = 2;
+        svCtx.stroke();
+        svCtx.shadowColor = '#000';
+        svCtx.shadowBlur = 4;
+        svCtx.stroke();
+        svCtx.shadowColor = 'transparent';
+    }
+
+    function drawHueBar() {
+        const width = hueCanvas.width;
+        const height = hueCanvas.height;
+        const gradient = hueCtx.createLinearGradient(0, 0, width, 0);
+        for (let i = 0; i <= 360; i+=30) {
+            gradient.addColorStop(i/360, `hsl(${i}, 100%, 50%)`);
+        }
+        hueCtx.fillStyle = gradient;
+        hueCtx.fillRect(0, 0, width, height);
+        // 绘制指示器
+        const indicatorX = (hsv.h / 360) * width;
+        hueCtx.beginPath();
+        hueCtx.moveTo(indicatorX, 0);
+        hueCtx.lineTo(indicatorX, height);
+        hueCtx.strokeStyle = '#fff';
+        hueCtx.lineWidth = 2;
+        hueCtx.stroke();
+    }
+
+    function updatePreviewAndInput() {
+        const rgb = hsvToRgb(hsv.h, hsv.s, hsv.v);
+        const hex = rgbToHex(rgb[0], rgb[1], rgb[2]);
+        preview.style.backgroundColor = hex;
+        hexInput.value = hex;
+        // 实时应用到文本框
+        activeObj.set('fill', hex);
+        CanvasState.canvas.renderAll();
+    }
+
+    function setColorFromHex(hex) {
+        const hsvNew = hexToHsv(hex);
+        hsv.h = hsvNew.h;
+        hsv.s = hsvNew.s;
+        hsv.v = hsvNew.v;
+        drawSVPanel(hsv.h);
+        drawHueBar();
+        updatePreviewAndInput();
+    }
+
+    // 初始化绘制
+    drawSVPanel(hsv.h);
+    drawHueBar();
+    updatePreviewAndInput();
+
+    // 事件处理
+    let isDraggingSV = false;
+    let isDraggingHue = false;
+
+    function handleSVMove(clientX, clientY) {
+        const rect = svCanvas.getBoundingClientRect();
+        const scaleX = svCanvas.width / rect.width;
+        const scaleY = svCanvas.height / rect.height;
+        let x = (clientX - rect.left) * scaleX;
+        let y = (clientY - rect.top) * scaleY;
+        x = Math.max(0, Math.min(svCanvas.width, x));
+        y = Math.max(0, Math.min(svCanvas.height, y));
+        hsv.s = x / svCanvas.width;
+        hsv.v = 1 - y / svCanvas.height;
+        drawSVPanel(hsv.h);
+        updatePreviewAndInput();
+    }
+
+    function handleHueMove(clientX) {
+        const rect = hueCanvas.getBoundingClientRect();
+        const scaleX = hueCanvas.width / rect.width;
+        let x = (clientX - rect.left) * scaleX;
+        x = Math.max(0, Math.min(hueCanvas.width, x));
+        hsv.h = (x / hueCanvas.width) * 360;
+        drawSVPanel(hsv.h);
+        drawHueBar();
+        updatePreviewAndInput();
+    }
+
+    svCanvas.addEventListener('mousedown', (e) => {
+        isDraggingSV = true;
+        handleSVMove(e.clientX, e.clientY);
+        e.preventDefault();
+    });
+    window.addEventListener('mousemove', (e) => {
+        if (isDraggingSV) {
+            handleSVMove(e.clientX, e.clientY);
+            e.preventDefault();
+        } else if (isDraggingHue) {
+            handleHueMove(e.clientX);
+            e.preventDefault();
+        }
+    });
+    window.addEventListener('mouseup', () => {
+        isDraggingSV = false;
+        isDraggingHue = false;
+    });
+
+    hueCanvas.addEventListener('mousedown', (e) => {
+        isDraggingHue = true;
+        handleHueMove(e.clientX);
+        e.preventDefault();
+    });
+
+    hexInput.addEventListener('change', () => {
+        try {
+            const hex = hexInput.value.trim();
+            if (/^#[0-9A-F]{6}$/i.test(hex)) {
+                setColorFromHex(hex);
+            }
+        } catch (e) {}
+    });
+
+    cancelBtn.addEventListener('click', () => {
+        // 恢复原始颜色
+        activeObj.set('fill', currentColor);
+        CanvasState.canvas.renderAll();
+        panel.remove();
+        cleanup();
+    });
+
+    applyBtn.addEventListener('click', () => {
+        panel.remove();
+        cleanup();
+    });
+
+    function cleanup() {
+        window.removeEventListener('mousemove', handleSVMove);
+        window.removeEventListener('mouseup', cleanup);
+    }
+
+    // 点击外部关闭
+    const closeHandler = (e) => {
+        if (!panel.contains(e.target)) {
+            panel.remove();
+            document.removeEventListener('click', closeHandler);
+            cleanup();
+        }
+    };
+    setTimeout(() => document.addEventListener('click', closeHandler), 0);
+
+    // 辅助函数：HSV与RGB转换
+    function hsvToRgb(h, s, v) {
+        h = h % 360 / 360;
+        let r, g, b;
+        const i = Math.floor(h * 6);
+        const f = h * 6 - i;
+        const p = v * (1 - s);
+        const q = v * (1 - f * s);
+        const t = v * (1 - (1 - f) * s);
+        switch (i % 6) {
+            case 0: r = v; g = t; b = p; break;
+            case 1: r = q; g = v; b = p; break;
+            case 2: r = p; g = v; b = t; break;
+            case 3: r = p; g = q; b = v; break;
+            case 4: r = t; g = p; b = v; break;
+            case 5: r = v; g = p; b = q; break;
+        }
+        return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+    }
+
+    function rgbToHex(r, g, b) {
+        return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
+    }
+
+    function hexToHsv(hex) {
+        let r, g, b;
+        if (hex.length === 7) {
+            r = parseInt(hex.slice(1,3), 16) / 255;
+            g = parseInt(hex.slice(3,5), 16) / 255;
+            b = parseInt(hex.slice(5,7), 16) / 255;
+        } else {
+            r = g = b = 0;
+        }
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        const d = max - min;
+        let h = 0;
+        const s = max === 0 ? 0 : d / max;
+        const v = max;
+        if (max !== min) {
+            switch (max) {
+                case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                case g: h = (b - r) / d + 2; break;
+                case b: h = (r - g) / d + 4; break;
+            }
+            h /= 6;
+        }
+        return { h: h * 360, s, v };
+    }
+};
+
 // 启动
-document.addEventListener('DOMContentLoaded', () => setTimeout(initCanvas, 100));
+document.addEventListener('DOMContentLoaded', () => {setTimeout(initCanvas, 100);
+});
 
