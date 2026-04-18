@@ -1177,7 +1177,129 @@ window.canvasControls = {
         }
         CanvasState.userTextBoxes.push(textBox);
     },
+    
+};
+
+// ==================== 字体选择功能 ====================
+window.selectFontFamily = function() {
+    // 移除已有的字体面板
+    const existingPanel = document.getElementById('font-family-panel');
+    if (existingPanel) {
+        existingPanel.remove();
+        return;
+    }
+
+    // 获取当前选中的文本对象
+    const activeObj = CanvasState.canvas.getActiveObject();
+    if (!activeObj || (activeObj.type !== 'textbox' && activeObj.type !== 'i-text' && activeObj.type !== 'text')) {
+        window.showToast && window.showToast('请先选中一个文本框', 'warning');
+        return;
+    }
+
+    // 创建浮动面板
+    const panel = document.createElement('div');
+    panel.id = 'font-family-panel';
+
+    // 定位：出现在右侧按钮栏左侧
+    const rightBar = document.getElementById('right-button-bar');
+    if (rightBar) {
+        const rect = rightBar.getBoundingClientRect();
+        panel.style.right = (window.innerWidth - rect.left + 5) + 'px';
+        panel.style.top = Math.max(10, rect.top) + 'px';
+    } else {
+        panel.style.right = '50px';
+        panel.style.top = '100px';
+    }
+
+    panel.style.position = 'fixed';
+    panel.style.width = '220px';
+    panel.style.maxHeight = '400px';
+    panel.style.overflowY = 'auto';
+    panel.style.background = 'white';
+    panel.style.border = '1px solid #E0E0E0';
+    panel.style.borderRadius = '8px';
+    panel.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+    panel.style.zIndex = '10000';
+    panel.style.padding = '8px 0';
+
+    // 显示加载提示
+    panel.innerHTML = '<div style="padding: 12px 16px; color: #666; text-align: center;">加载字体列表中...</div>';
+    document.body.appendChild(panel);
+
+    // 辅助函数：渲染字体列表
+    const renderFontList = (fontFamilies) => {
+        panel.innerHTML = '';
+        if (!fontFamilies || fontFamilies.length === 0) {
+            panel.innerHTML = '<div style="padding: 12px 16px; color: #666; text-align: center;">未找到可用字体</div>';
+            return;
+        }
+
+        fontFamilies.forEach(font => {
+            const item = document.createElement('div');
+            item.textContent = font;
+            item.style.cssText = `
+                padding: 8px 16px;
+                cursor: pointer;
+                font-family: '${font}', system-ui;
+                font-size: 16px;
+                transition: background 0.2s;
+            `;
+            item.onmouseenter = () => item.style.backgroundColor = '#f0f2f5';
+            item.onmouseleave = () => item.style.backgroundColor = '';
+            item.onclick = () => {
+                activeObj.set('fontFamily', font);
+                CanvasState.canvas.renderAll();
+                panel.remove();
+            };
+            panel.appendChild(item);
+        });
+    };
+
+    // 回退字体列表（兼顾 Windows 和银河麒麟）
+    const fallbackFonts = [
+        // 基础通用字体
+        'Arial', 'Helvetica', 'sans-serif',
+        'Times New Roman', 'Georgia', 'serif',
+        'Courier New', 'monospace',
+        'system-ui', 'Segoe UI', 'Roboto',
+        // 常见中文字体
+        'Microsoft YaHei', 'SimHei', 'PingFang SC',
+        'SimSun', 'FangSong', 'KaiTi',
+    ];
+
+    // 尝试使用现代 API 获取系统字体
+    if (window.queryLocalFonts) {
+        window.queryLocalFonts().then(fonts => {
+            // 按 postscriptName 去重，避免同一字体族的多个变体重复
+            const fontMap = new Map();
+            fonts.forEach(font => fontMap.set(font.postscriptName, font));
+            const uniqueFonts = Array.from(fontMap.values());
+
+            // 提取字体族名称，去重并排序
+            const fontFamilies = [...new Set(uniqueFonts.map(font => font.family))]
+                .filter(name => name && typeof name === 'string')
+                .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+
+            renderFontList(fontFamilies);
+        }).catch(err => {
+            console.warn('获取本地字体失败，使用回退列表:', err);
+            renderFontList(fallbackFonts);
+        });
+    } else {
+        // 浏览器不支持，直接使用回退列表
+        renderFontList(fallbackFonts);
+    }
+
+    // 点击外部关闭面板
+    const closeHandler = (e) => {
+        if (!panel.contains(e.target) && e.target.closest('#font-family-panel') === null) {
+            panel.remove();
+            document.removeEventListener('click', closeHandler);
+        }
+    };
+    setTimeout(() => document.addEventListener('click', closeHandler), 0);
 };
 
 // 启动
 document.addEventListener('DOMContentLoaded', () => setTimeout(initCanvas, 100));
+
