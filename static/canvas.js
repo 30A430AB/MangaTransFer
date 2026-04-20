@@ -1357,7 +1357,7 @@ window.toggleItalic = function() {
     CanvasState.canvas.renderAll();
 };
 
-// ==================== 字体颜色选择（自定义画布颜色选择器） ====================
+// ==================== 字体颜色选择（模态对话框，仅通过按钮关闭） ====================
 window.chooseTextColor = function() {
     const activeObj = CanvasState.canvas.getActiveObject();
     if (!activeObj || (activeObj.type !== 'textbox' && activeObj.type !== 'i-text' && activeObj.type !== 'text')) {
@@ -1517,7 +1517,7 @@ window.chooseTextColor = function() {
         const width = hueCanvas.width;
         const height = hueCanvas.height;
         const gradient = hueCtx.createLinearGradient(0, 0, width, 0);
-        for (let i = 0; i <= 360; i+=30) {
+        for (let i = 0; i <= 360; i+=1) {
             gradient.addColorStop(i/360, `hsl(${i}, 100%, 50%)`);
         }
         hueCtx.fillStyle = gradient;
@@ -1620,33 +1620,29 @@ window.chooseTextColor = function() {
         } catch (e) {}
     });
 
-    cancelBtn.addEventListener('click', () => {
-        // 恢复原始颜色
-        activeObj.set('fill', currentColor);
-        CanvasState.canvas.renderAll();
+    // 关闭面板并清理事件
+    function closePanel(restoreColor = true) {
+        if (restoreColor) {
+            // 恢复原始颜色
+            activeObj.set('fill', currentColor);
+            CanvasState.canvas.renderAll();
+        }
         panel.remove();
         cleanup();
-    });
-
-    applyBtn.addEventListener('click', () => {
-        panel.remove();
-        cleanup();
-    });
+    }
 
     function cleanup() {
         window.removeEventListener('mousemove', handleSVMove);
         window.removeEventListener('mouseup', cleanup);
     }
 
-    // 点击外部关闭
-    const closeHandler = (e) => {
-        if (!panel.contains(e.target)) {
-            panel.remove();
-            document.removeEventListener('click', closeHandler);
-            cleanup();
-        }
-    };
-    setTimeout(() => document.addEventListener('click', closeHandler), 0);
+    cancelBtn.addEventListener('click', () => {
+        closePanel(true);
+    });
+
+    applyBtn.addEventListener('click', () => {
+        closePanel(false);
+    });
 
     // 辅助函数：HSV与RGB转换
     function hsvToRgb(h, s, v) {
