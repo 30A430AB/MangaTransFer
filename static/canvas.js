@@ -103,7 +103,49 @@ function initCanvas() {
     
     CanvasState.canvas.on('mouse:wheel', onMouseWheel);
     
-    bindCanvasEvents();
+    bindCanvasEvents();    // 禁用文本框缩放时改变字体大小（保持字体大小固定）
+    CanvasState.canvas.on('object:scaling', (e) => {
+        const obj = e.target;
+        if (!obj) return;
+        if (obj.type === 'textbox' || obj.type === 'i-text' || obj.type === 'text') {
+            // 保存当前字体大小
+            const currentFontSize = obj.fontSize;
+            // 计算新宽度和高度（考虑缩放因子）
+            const newWidth = obj.width * obj.scaleX;
+            const newHeight = obj.height * obj.scaleY;
+            // 应用新宽高，重置缩放，保持字体大小
+            obj.set({
+                width: newWidth,
+                height: newHeight,
+                scaleX: 1,
+                scaleY: 1,
+                fontSize: currentFontSize
+            });
+            // 重新计算文本换行等
+            obj.initDimensions();
+        }
+    });
+
+    // 最终修改完成后的保险（防止某些情况下的状态异常）
+    CanvasState.canvas.on('object:modified', (e) => {
+        const obj = e.target;
+        if (!obj) return;
+        if (obj.type === 'textbox' || obj.type === 'i-text' || obj.type === 'text') {
+            // 确保缩放已重置，字体大小不变
+            if (obj.scaleX !== 1 || obj.scaleY !== 1) {
+                const currentFontSize = obj.fontSize;
+                obj.set({
+                    width: obj.width * obj.scaleX,
+                    height: obj.height * obj.scaleY,
+                    scaleX: 1,
+                    scaleY: 1,
+                    fontSize: currentFontSize
+                });
+                obj.initDimensions();
+            }
+            CanvasState.canvas.renderAll();
+        }
+    });
     switchTool('drag');
     window.currentAlgorithm = window.ALGO_PATCHMATCH;
 }
@@ -1357,7 +1399,7 @@ window.toggleItalic = function() {
     CanvasState.canvas.renderAll();
 };
 
-// ==================== 字体颜色选择（带取色器，模态对话框） ====================
+// ==================== 字体颜色选择 ====================
 window.chooseTextColor = function() {
     const activeObj = CanvasState.canvas.getActiveObject();
     if (!activeObj || (activeObj.type !== 'textbox' && activeObj.type !== 'i-text' && activeObj.type !== 'text')) {
