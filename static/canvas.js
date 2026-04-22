@@ -1906,12 +1906,12 @@ window.setLetterSpacing = function() {
         panel.style.top = '100px';
     }
 
-    // 当前字间距值（Fabric.js 中 charSpacing 单位为像素，默认为 0）
+    // 当前字间距值
     const currentCharSpacing = activeObj.charSpacing !== undefined ? activeObj.charSpacing : 0;
 
     // 创建说明标签
     const label = document.createElement('div');
-    label.textContent = '字间距 (px)';
+    label.textContent = '字间距';
     label.style.cssText = 'font-size: 14px; color: #333; margin-bottom: 12px;';
 
     // 滑块容器
@@ -1921,18 +1921,19 @@ window.setLetterSpacing = function() {
     const slider = document.createElement('input');
     slider.type = 'range';
     slider.min = '0';
-    slider.max = '200';
+    slider.max = '2000';
     slider.step = '1';
     slider.value = currentCharSpacing;
     slider.style.cssText = 'flex: 1;';
 
     const valueDisplay = document.createElement('span');
-    valueDisplay.textContent = currentCharSpacing + 'px';
+    // 显示除以10后的值，保留一位小数
+    valueDisplay.textContent = (currentCharSpacing / 10).toFixed(1);
     valueDisplay.style.cssText = 'min-width: 50px; text-align: right; font-size: 14px; color: #666;';
 
     slider.addEventListener('input', () => {
         const val = parseInt(slider.value);
-        valueDisplay.textContent = val + 'px';
+        valueDisplay.textContent = (val / 10).toFixed(1);
         activeObj.set('charSpacing', val);
         CanvasState.canvas.renderAll();
     });
