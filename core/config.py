@@ -2,6 +2,8 @@ import sys
 import pooch
 from pathlib import Path
 
+import torch
+
 # 项目根目录
 _PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -32,6 +34,16 @@ class DataPaths:
 
     @classproperty
     def COMIC_TEXT_DETECTOR(cls):
+        # 1. 有 CUDA 时直接用 PyTorch 模型
+        if torch.cuda.is_available():
+            return ResourceManager.get_file("models/comictextdetector.pt")
+        
+        # 2. 纯 CPU 时优先尝试 ONNX
+        onnx_path = ResourceManager.get_file("models/comictextdetector.pt.onnx")
+        if onnx_path is not None:
+            return onnx_path
+        
+        # 3. ONNX 不可用时回退到 PyTorch（CPU）
         return ResourceManager.get_file("models/comictextdetector.pt")
 
     @classproperty
@@ -64,6 +76,7 @@ class ResourceManager:
     # 本地相对路径 (相对于 data/) -> (远程文件名, SHA-256)
     FILES = {
         "models/comictextdetector.pt": ("comictextdetector.pt", "1f90fa60aeeb1eb82e2ac1167a66bf139a8a61b8780acd351ead55268540cccb"),
+        "models/comictextdetector.pt.onnx": ("comictextdetector.pt.onnx","1a86ace74961413cbd650002e7bb4dcec4980ffa21b2f19b86933372071d718f"),
         "models/resnet18-f37072fd.pth": ("resnet18-f37072fd.pth", "f37072fd47e89c5e827621c5baffa7500819f7896bbacec160b1a16c560e07ec"),
         "models/anime-manga-big-lama.pt": ("anime-manga-big-lama.pt", "479d3afdcb7ed2fd944ed4ebcc39ca45b33491f0f2e43eb1000bd623cfb41823"),
         "libs/libpatchmatch.so": ("libpatchmatch.so", "dcd2fe308a31cfe2c5e762aadbac68dde516fdaafa598744087a14dcd20c5533"),
