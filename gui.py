@@ -1039,7 +1039,7 @@ async def get_working_image(request: Request):
 # ==================== 启动应用 ====================
 ui.run(
     title='MangaTransFer',
-    host='0.0.0.0',
+    host='127.0.0.1',
     port=8090,
     dark=False,
     reload=False,
