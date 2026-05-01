@@ -18,7 +18,7 @@ from loguru import logger
 
 from core.matching import match_images
 from core.inpainting import Inpainter
-from core.config import SUPPORTED_EXTENSIONS, DirPaths, DataPaths, InpaintAlgorithm
+from core.config import SUPPORTED_EXTENSIONS, DirPaths, DataPaths, InpaintAlgorithm, SVG_ICONS
 from cli import MangaTransFerPipeline
 
 # ==================== 全局设置 ====================
@@ -306,8 +306,8 @@ current_algorithm = InpaintAlgorithm.PATCHMATCH
 
 ui.add_head_html('<link rel="stylesheet" href="/static/styles.css">')
 ui.add_head_html('<script src="/static/fabric.min.js"></script>')
-ui.add_head_html('<script src="/static/canvas.js"></script>')
 ui.add_head_html('<script src="/static/view.js"></script>')
+ui.add_head_html('<script src="/static/canvas.js"></script>')
 ui.add_head_html(f'''
 <script>
     window.ALGO_PATCHMATCH = "{InpaintAlgorithm.PATCHMATCH}";
@@ -455,7 +455,7 @@ async def show_match_result_panel(matches, raw_dir, text_dir):
                                 <div class="thumb-wrapper" style="position: relative; display: inline-block;">
                                     <img src="{text_thumb_url}" style="width: auto; height: 150px; display: block;" />
                                     <div class="del-btn" style="position: absolute; top: 0; right: 0; width: 36px; height: 36px; background-color: #f08080; clip-path: polygon(100% 0, 0 0, 100% 100%); display: none; align-items: center; justify-content: center; cursor: pointer;">
-                                        <img src="/static/icons/close.svg" width="18" height="18" style="filter: brightness(0) invert(1); position: relative; left: 8px; top: -8px;">
+                                        <i class="material-icons" style="color: white; font-size: 18px; position: relative; left: 8px; top: -8px;">close</i>
                                     </div>
                                 </div>
                             ''')
@@ -581,7 +581,7 @@ with ui.element('div').classes('fixed top-0 left-0 w-full h-full').style('margin
                                 .props('flat dense') \
                                 .on('click', lambda: ui.run_javascript('window.canvasControls.toggleWorkingReference()'))           
                             with split_btn:
-                                ui.image('static/icons/view_column_2.svg').style('width: 24px; height: 24px')
+                                ui.html(f'<img src="{SVG_ICONS["view_column_2"]}" style="width:24px;height:24px;">')
                             new_btn = ui.button(icon='o_create_new_folder', color='transparent') \
                                 .props('flat dense') \
                                 .on('click', show_new_project_dialog)
@@ -609,9 +609,40 @@ with ui.element('div').classes('fixed top-0 left-0 w-full h-full').style('margin
                                     current_algorithm = InpaintAlgorithm.PATCHMATCH
                                 ui.run_javascript(f'window.updateAlgorithmLabel("{current_algorithm}");')
                             algorithm_label.on('click', toggle_algorithm)
-                    with ui.element('div').style('height:calc(100% - 40px); margin:0; padding:0;').props('name="canvas"'):
-                        with ui.element('div').props('id="canvas-container"').style('width:100%; height:100%; position:relative; overflow:hidden;'):
+                    with ui.element('div').style('height:calc(100% - 40px); margin:0; padding:0; display:flex;').props('name="canvas"'):
+                        with ui.element('div').props('id="canvas-container"').style('flex:1; min-width:0; height:100%; position:relative; overflow:hidden;'):
                             ui.element('canvas').props('id="comic-canvas"').style('width:100%; height:100%; display:block;')
+
+                        with ui.element('div').style('width:40px; height:100%; background-color:#ffffff; border-left:1px solid #E0E0E0; display:flex; flex-direction:column; align-items:center; padding-top:10px; gap:10px;').props('id="right-button-bar"'):
+                            # 插入文本
+                            with ui.button(color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.canvasControls.insertTextBlock()')):
+                                ui.html(f'<img src="{SVG_ICONS["insert_text"]}" style="width:24px;height:24px;">')
+                            # 选择字体
+                            with ui.button(color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.selectFontFamily()')):
+                                ui.html(f'<img src="{SVG_ICONS["brand_family"]}" style="width:24px;height:24px;">')
+                            # 字号增大
+                            ui.button(icon='text_increase', color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.increaseFontSize()'))
+                            # 字号减小
+                            ui.button(icon='text_decrease', color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.decreaseFontSize()'))
+                            # 加粗
+                            ui.button(icon='format_bold', color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.toggleFontBold()'))
+                            # 斜体
+                            ui.button(icon='format_italic', color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.toggleItalic()'))
+                            # 字体颜色
+                            with ui.button(color='transparent').props('flat dense id="font-color-btn"').on('click', lambda: ui.run_javascript('window.chooseTextColor()')):
+                                ui.html(f'<img src="{SVG_ICONS["format_color_text"]}" style="width:24px;height:24px;">')
+                            # 行距
+                            ui.button(icon='format_line_spacing', color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.setLineSpacing()'))
+                            # 字间距
+                            with ui.button(color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.setLetterSpacing()')):
+                                ui.html(f'<img src="{SVG_ICONS["format_letter_spacing_2"]}" style="width:24px;height:24px;">')
+                            # 文字方向：左到右
+                            ui.button(icon='format_textdirection_l_to_r', color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.setTextDirectionLTR()'))
+                            # 文字方向：右到左
+                            ui.button(icon='format_textdirection_r_to_l', color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.setTextDirectionRTL()'))
+                            with ui.button(color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.setTextDirectionVertical()')):
+                                ui.html(f'<img src="{SVG_ICONS["format_textdirection_on_vertical"]}" style="width:24px;height:24px;">')
+                                  
             with ui.element('div').classes('bg-white').style('height:40px; flex-shrink:0; margin:0; padding:0; width:100%; display:flex; align-items:center; border-top:1px solid #E0E0E0; box-sizing:border-box;').props('name="zoom-bar"'):
                 with ui.element('div').style('width:33%; height:100%; display:flex; align-items:center; justify-content:center; padding:0 10px;'):
                     with ui.element('div').style('display:flex; align-items:center; gap:10px; width:100%;'):
@@ -663,7 +694,11 @@ class local_dir_picker(ui.dialog):
                 'columnDefs': [
                     {'field': 'name', 'headerName': '目录', 'resizable': False}
                 ],
-                'rowSelection': 'single',
+                'rowSelection': {
+                    'mode': 'singleRow',
+                    'enableClickSelection': True,
+                    'checkboxes': False,
+                },
                 'defaultColDef': {
                     'resizable': False,
                     'sortable': False,
@@ -710,7 +745,7 @@ class local_dir_picker(ui.dialog):
             if self.upper_limit is not None and new_path == self.upper_limit.parent:
                 pass
             self.path = new_path
-            self.grid.run_grid_method('forEachNode', 'function(node) { node.setSelected(false); }')
+            self.grid.run_grid_method('deselectAll')
             self._update_grid()
         except Exception as ex:
             logger.error(f"目录跳转失败: {ex}")
