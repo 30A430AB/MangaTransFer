@@ -636,10 +636,7 @@ with ui.element('div').classes('fixed top-0 left-0 w-full h-full').style('margin
                             # 字间距
                             with ui.button(color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.setLetterSpacing()')):
                                 ui.html(f'<img src="{SVG_ICONS["format_letter_spacing_2"]}" style="width:24px;height:24px;">')
-                            # 文字方向：左到右
-                            ui.button(icon='format_textdirection_l_to_r', color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.setTextDirectionLTR()'))
-                            # 文字方向：右到左
-                            ui.button(icon='format_textdirection_r_to_l', color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.setTextDirectionRTL()'))
+                            # 竖排
                             with ui.button(color='transparent').props('flat dense').on('click', lambda: ui.run_javascript('window.setTextDirectionVertical()')):
                                 ui.html(f'<img src="{SVG_ICONS["format_textdirection_on_vertical"]}" style="width:24px;height:24px;">')
                                   
