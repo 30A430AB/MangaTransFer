@@ -1,6 +1,6 @@
 # MangaTransFer - 漫画翻译移植
 
-带露折花，色香自然要好得多；昔时不能够，今以朝花夕拾，终可为之。
+“这些事情你们去办，我要把精力放在微操上面。”
 
 ![screenshot](docs/images/screenshot.webp)
 <p align="center">界面预览</p>
